@@ -155,8 +155,8 @@ function SetupConsole() {
     onError: fail,
   });
   const mCreds = useMutation({
-    mutationFn: (v: { apiId?: string; apiHash?: string; botToken?: string }) =>
-      saveCredentials({ data: v }),
+    mutationFn: (v: Record<string, string>) =>
+      saveCredentials({ data: v as { apiId: string } }),
     onSuccess: () => {
       toast.success("Saved securely");
       setApiId("");
@@ -245,9 +245,6 @@ function SetupConsole() {
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={() => void refetch()} disabled={isFetching}>
             <RefreshCw className={"size-4 " + (isFetching ? "animate-spin" : "")} />
-          </Button>
-          <Button variant="ghost" size="sm" asChild>
-            <Link to="/history">History</Link>
           </Button>
           <Button
             variant="ghost"
@@ -384,9 +381,12 @@ function SetupConsole() {
           <Button
             className="mt-3"
             disabled={!online || (!apiId && !apiHash) || mCreds.isPending}
-            onClick={() =>
-              mCreds.mutate({ apiId: apiId || undefined, apiHash: apiHash || undefined })
-            }
+            onClick={() => {
+              const v: Record<string, string> = {};
+              if (apiId) v['apiId'] = apiId;
+              if (apiHash) v['apiHash'] = apiHash;
+              mCreds.mutate(v);
+            }}
           >
             Save API credentials
           </Button>
