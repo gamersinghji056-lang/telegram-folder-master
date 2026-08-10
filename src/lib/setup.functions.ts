@@ -2,6 +2,32 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 
+export interface WorkerStatus {
+  running: boolean;
+  api_configured: boolean;
+  bot_configured: boolean;
+  session_configured: boolean;
+  bot_username: string | null;
+  telegram_username: string | null;
+  is_premium: boolean;
+}
+
+export interface WorkerCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface WorkerResult {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  needsCode?: boolean;
+  needsPassword?: boolean;
+  status?: WorkerStatus;
+  checks?: WorkerCheck[];
+}
+
 /** Talks to the user's own MTProto worker. Never exposes secrets to the browser. */
 async function callWorker(
   workerUrl: string,
@@ -20,13 +46,13 @@ async function callWorker(
     signal: AbortSignal.timeout(60_000),
   });
   const text = await res.text();
-  let data: Record<string, unknown>;
+  let data: WorkerResult;
   try {
-    data = JSON.parse(text) as Record<string, unknown>;
+    data = JSON.parse(text) as WorkerResult;
   } catch {
     throw new Error(`Worker returned a non-JSON response (HTTP ${res.status}).`);
   }
-  if (!res.ok) throw new Error(String(data["error"] ?? `Worker error (HTTP ${res.status}).`));
+  if (!res.ok) throw new Error(data.error ?? `Worker error (HTTP ${res.status}).`);
   return data;
 }
 
@@ -59,7 +85,7 @@ export const getSetupState = createServerFn({ method: "GET" })
       .eq("user_id", userId)
       .maybeSingle();
 
-    let worker: { online: boolean; error: string | null; info: Record<string, unknown> | null } = {
+    let worker: { online: boolean; error: string | null; info: WorkerResult | null } = {
       online: false,
       error: link.worker_url ? null : "Worker URL not set yet.",
       info: null,
