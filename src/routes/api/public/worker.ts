@@ -103,7 +103,7 @@ export const Route = createFileRoute("/api/public/worker")({
             }
             const { error } = await supabaseAdmin
               .from("telegram_config")
-              .upsert(patch, { onConflict: "user_id" });
+              .upsert(patch as never, { onConflict: "user_id" });
             if (error) return json({ error: error.message }, 500);
             return json({ ok: true });
           }
@@ -123,7 +123,7 @@ export const Route = createFileRoute("/api/public/worker")({
             }
             const { error } = await supabaseAdmin
               .from("telegram_status")
-              .upsert(patch, { onConflict: "user_id" });
+              .upsert(patch as never, { onConflict: "user_id" });
             if (error) return json({ error: error.message }, 500);
             return json({ ok: true });
           }
@@ -134,7 +134,7 @@ export const Route = createFileRoute("/api/public/worker")({
               .from("jobs")
               .insert({
                 user_id: userId,
-                bot_chat_id: typeof p["bot_chat_id"] === "number" ? p["bot_chat_id"] : null,
+                bot_chat_id: typeof p["bot_chat_id"] === "number" ? (p["bot_chat_id"] as number) : null,
                 status: "RUNNING",
                 stage: "Starting",
                 folders_total: urls.length,
@@ -163,7 +163,7 @@ export const Route = createFileRoute("/api/public/worker")({
             const patch = (p["patch"] ?? {}) as Record<string, unknown>;
             const { error } = await supabaseAdmin
               .from("jobs")
-              .update(patch)
+              .update(patch as never)
               .eq("id", jobId)
               .eq("user_id", userId);
             if (error) return json({ error: error.message }, 500);
@@ -175,7 +175,7 @@ export const Route = createFileRoute("/api/public/worker")({
             const patch = (p["patch"] ?? {}) as Record<string, unknown>;
             const { error } = await supabaseAdmin
               .from("job_folders")
-              .update(patch)
+              .update(patch as never)
               .eq("id", folderId)
               .eq("user_id", userId);
             if (error) return json({ error: error.message }, 500);
@@ -245,7 +245,7 @@ export const Route = createFileRoute("/api/public/worker")({
             }
             const { error: jcErr } = await supabaseAdmin
               .from("job_chats")
-              .upsert(rows, { onConflict: "job_id,folder_id,telegram_chat_id" });
+              .upsert(rows as never, { onConflict: "job_id,folder_id,telegram_chat_id" });
             if (jcErr) return json({ error: jcErr.message }, 500);
             return json({ ok: true, inserted: rows.length, duplicates });
           }
