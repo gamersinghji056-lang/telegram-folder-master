@@ -27,6 +27,20 @@ It is tiny (one Node process, ~50 MB RAM) and free/cheap to host.
 5. Settings → Networking → **Generate Domain**. Copy that https URL.
 6. Paste the URL into the website's Setup page, Step 1.
 
+Build Command: `npm install --omit=dev`
+Start Command: `node src/index.js`
+
+Both are already declared in `worker/railway.json` and `worker/nixpacks.toml`,
+so Railway picks them up automatically when Root Directory is `worker`.
+If you leave Root Directory empty (repo root), the root `railway.json` applies
+instead and runs `cd worker && node src/index.js`.
+
+There is **no** `dist/` build output — this worker is plain Node.js and is
+never bundled. Any start command pointing at `dist/server/server.js` is wrong.
+
+The website itself is hosted by Lovable and must **not** be deployed to
+Railway; Railway runs only this worker process.
+
 ### Fly.io
 
 ```bash
