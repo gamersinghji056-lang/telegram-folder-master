@@ -113,7 +113,11 @@ function json(res, code, body) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.method === "GET" && req.url === "/health") return json(res, 200, { ok: true });
+  // Unauthenticated liveness probe. No database, Telegram or external calls.
+  const path = (req.url || "/").split("?")[0];
+  if (req.method === "GET" && (path === "/health" || path === "/")) {
+    return json(res, 200, { ok: true });
+  }
   if (req.method !== "POST" || !req.url?.startsWith("/rpc")) return json(res, 404, { error: "not_found" });
 
   const auth = req.headers["authorization"] || "";
@@ -143,15 +147,19 @@ const server = http.createServer((req, res) => {
   });
 });
 
-async function main() {
-  for (const v of ["APP_URL", "WORKER_TOKEN", "ENCRYPTION_KEY"]) {
-    if (!process.env[v]) {
-      console.error(`Missing required environment variable: ${v}`);
-      process.exit(1);
-    }
-  }
-  server.listen(PORT, () => console.log(`worker listening on :${PORT}`));
+// Never let a background failure kill the process: the health check must stay up.
+process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e?.message || e));
+process.on("uncaughtException", (e) => console.error("uncaughtException:", e?.message || e));
 
+async function init() {
+  const missing = ["APP_URL", "WORKER_TOKEN", "ENCRYPTION_KEY"].filter((v) => !process.env[v]);
+  if (missing.length) {
+    console.error(
+      `Missing environment variables: ${missing.join(", ")}. ` +
+        "The worker stays up and healthy, but Telegram features are disabled until they are set.",
+    );
+    return;
+  }
   try {
     await loadConfig();
   } catch (e) {
@@ -170,4 +178,9 @@ async function main() {
   }, 60_000);
 }
 
-main();
+// Bind to 0.0.0.0 on the platform-provided PORT *before* any slow init work,
+// so Railway's health check succeeds immediately.
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`worker listening on 0.0.0.0:${PORT}`);
+  init().catch((e) => console.error("init failed:", e?.message || e));
+});
