@@ -25,6 +25,7 @@ import { encrypt, decrypt } from "./crypto.js";
 
 const clients = new Map();
 const logins = new Map();
+const LOGIN_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Global Telegram API application configuration.
@@ -246,6 +247,53 @@ export async function isUserConnected(botUserId) {
   }
 }
 
+function telegramErrorMessage(error) {
+  return error?.errorMessage || error?.message || String(error || "");
+}
+
+function floodWaitSeconds(errorOrMessage) {
+  const seconds =
+    typeof errorOrMessage === "object" && errorOrMessage ? errorOrMessage.seconds : null;
+  if (seconds) return Number(seconds);
+
+  const text =
+    typeof errorOrMessage === "string" ? errorOrMessage : telegramErrorMessage(errorOrMessage);
+  const match = text.match(/FLOOD_WAIT_(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function loginAge(login) {
+  return Date.now() - login.createdAt;
+}
+
+function isLoginExpired(login) {
+  return !login || loginAge(login) > LOGIN_TTL_MS;
+}
+
+async function clearLogin(key) {
+  const login = logins.get(key);
+  if (login?.client) {
+    await login.client.disconnect().catch(() => {});
+  }
+  logins.delete(key);
+}
+
+async function authFloodWait(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    const seconds = floodWaitSeconds(e);
+    if (!seconds) throw e;
+
+    if (seconds > 30) {
+      throw e;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, (seconds + 1) * 1000));
+    return fn();
+  }
+}
+
 /**
  * Start Telegram login for one bot user.
  *
@@ -270,16 +318,16 @@ export async function sendCode(botUserId, phone, botChatId = null) {
     throw new Error("Please send your phone number with country code. Example: +919876543210");
   }
 
-  /**
-   * Disconnect an unfinished login for this bot user.
-   */
   const oldLogin = logins.get(key);
-
-  if (oldLogin?.client) {
-    await oldLogin.client.disconnect().catch(() => {});
+  if (oldLogin && !isLoginExpired(oldLogin)) {
+    throw new Error(
+      "A Telegram login is already active. Send the OTP code, or send /cancel before starting again.",
+    );
   }
 
-  logins.delete(key);
+  if (oldLogin) {
+    await clearLogin(key);
+  }
 
   /**
    * Create a completely new MTProto client.
@@ -293,19 +341,28 @@ export async function sendCode(botUserId, phone, botChatId = null) {
   let result;
 
   try {
-    result = await client.sendCode(
-      {
-        apiId: state.apiId,
-        apiHash: state.apiHash,
-      },
-      cleanPhone,
+    result = await authFloodWait(() =>
+      client.invoke(
+        new Api.auth.SendCode({
+          phoneNumber: cleanPhone,
+          apiId: state.apiId,
+          apiHash: state.apiHash,
+          settings: new Api.CodeSettings({}),
+        }),
+      ),
     );
   } catch (e) {
     await client.disconnect().catch(() => {});
 
-    const msg = e?.errorMessage || e?.message || "";
+    const msg = telegramErrorMessage(e);
+    console.error(`Telegram auth sendCode failed for bot user ${key}: ${msg}`);
 
     throw new Error(friendlyAuthError(msg));
+  }
+
+  if (!result?.phoneCodeHash) {
+    await client.disconnect().catch(() => {});
+    throw new Error("Telegram did not return a phoneCodeHash. Please try /connect again.");
   }
 
   logins.set(key, {
@@ -314,6 +371,7 @@ export async function sendCode(botUserId, phone, botChatId = null) {
     botChatId,
     phoneCodeHash: result.phoneCodeHash,
     createdAt: Date.now(),
+    needsPassword: false,
   });
 
   return {
@@ -335,6 +393,11 @@ export async function signInWithCode(botUserId, code) {
     throw new Error("No active Telegram login request. Please use /connect again.");
   }
 
+  if (isLoginExpired(login)) {
+    await clearLogin(key);
+    throw new Error("This Telegram login attempt expired. Please use /connect again.");
+  }
+
   const cleanCode = String(code ?? "").trim();
 
   if (!cleanCode) {
@@ -344,20 +407,24 @@ export async function signInWithCode(botUserId, code) {
   const { client, phone, phoneCodeHash } = login;
 
   try {
-    await client.invoke(
-      new Api.auth.SignIn({
-        phoneNumber: phone,
-        phoneCodeHash,
-        phoneCode: cleanCode,
-      }),
+    await authFloodWait(() =>
+      client.invoke(
+        new Api.auth.SignIn({
+          phoneNumber: phone,
+          phoneCodeHash,
+          phoneCode: cleanCode,
+        }),
+      ),
     );
   } catch (e) {
-    const msg = e?.errorMessage || e?.message || "";
+    const msg = telegramErrorMessage(e);
+    console.error(`Telegram auth signIn failed for bot user ${key}: ${msg}`);
 
     /**
      * Telegram 2FA password is required.
      */
     if (msg.includes("SESSION_PASSWORD_NEEDED")) {
+      login.needsPassword = true;
       return {
         ok: true,
         needsPassword: true,
@@ -382,6 +449,11 @@ export async function signInWithPassword(botUserId, password) {
     throw new Error("No active Telegram login request. Please use /connect again.");
   }
 
+  if (isLoginExpired(login)) {
+    await clearLogin(key);
+    throw new Error("This Telegram login attempt expired. Please use /connect again.");
+  }
+
   const cleanPassword = String(password ?? "");
 
   if (!cleanPassword) {
@@ -391,17 +463,21 @@ export async function signInWithPassword(botUserId, password) {
   const { client } = login;
 
   try {
-    const pwd = await client.invoke(new Api.account.GetPassword());
+    const pwd = await authFloodWait(() => client.invoke(new Api.account.GetPassword()));
 
     const passwordCheck = await computeCheck(pwd, cleanPassword);
 
-    await client.invoke(
-      new Api.auth.CheckPassword({
-        password: passwordCheck,
-      }),
+    await authFloodWait(() =>
+      client.invoke(
+        new Api.auth.CheckPassword({
+          password: passwordCheck,
+        }),
+      ),
     );
   } catch (e) {
-    throw new Error(friendlyAuthError(e?.errorMessage || e?.message || ""));
+    const msg = telegramErrorMessage(e);
+    console.error(`Telegram auth checkPassword failed for bot user ${key}: ${msg}`);
+    throw new Error(friendlyAuthError(msg));
   }
 
   return finishLogin(botUserId);
@@ -545,7 +621,7 @@ export function getLoginState(botUserId) {
    */
   const age = Date.now() - login.createdAt;
 
-  if (age > 10 * 60 * 1000) {
+  if (age > LOGIN_TTL_MS) {
     return {
       active: false,
       expired: true,
@@ -556,6 +632,7 @@ export function getLoginState(botUserId) {
     active: true,
     phone: login.phone,
     ageMs: age,
+    needsPassword: Boolean(login.needsPassword),
   };
 }
 
@@ -567,7 +644,7 @@ export async function withFloodWait(fn, onWait) {
     try {
       return await fn();
     } catch (e) {
-      const seconds = e?.seconds ?? e?.errorMessage?.match?.(/FLOOD_WAIT_(\d+)/)?.[1];
+      const seconds = floodWaitSeconds(e);
 
       if (seconds && Number(seconds) <= 3600) {
         const waitSeconds = Number(seconds);

@@ -8,6 +8,7 @@ import {
   signInWithCode,
   signInWithPassword,
   cancelLogin,
+  getLoginState,
 } from "./tg.js";
 import { runJob, parseFolderLink } from "./process.js";
 
@@ -60,6 +61,26 @@ async function handleConnect(chatId, botUserId) {
     return;
   }
 
+  const key = String(botUserId);
+  const existingPrompt = sessions.get(key);
+  const login = getLoginState(botUserId);
+
+  if (login.active) {
+    if (existingPrompt?.mode === "connect_password" || login.needsPassword) {
+      sessions.set(key, { mode: "connect_password", chatId });
+      await send(chatId, "A Telegram login is already active. Send your 2FA password, or /cancel.");
+      return;
+    }
+
+    sessions.set(key, { mode: "connect_code", chatId });
+    await send(chatId, "A Telegram login is already active. Send the OTP code, or /cancel.");
+    return;
+  }
+
+  if (login.expired) {
+    await cancelLogin(botUserId).catch(() => {});
+  }
+
   sessions.set(String(botUserId), { mode: "connect_phone", chatId });
   await send(chatId, "Send your phone number with country code. Example: +919876543210");
 }
@@ -70,6 +91,12 @@ async function handlePhone(chatId, botUserId, text) {
     sessions.set(String(botUserId), { mode: "connect_code", chatId });
     await send(chatId, "Telegram sent you a login code. Send that code here.");
   } catch (e) {
+    if (String(e.message || "").includes("login is already active")) {
+      sessions.set(String(botUserId), { mode: "connect_code", chatId });
+      await send(chatId, `${e.message}`);
+      return;
+    }
+
     sessions.delete(String(botUserId));
     await send(chatId, `Could not start Telegram login: ${e.message}`);
   }
