@@ -14,11 +14,7 @@ import {
   getSetupState,
   saveWorkerUrl,
   saveCredentials,
-  startPhoneLogin,
-  submitPhoneCode,
-  submitPassword,
   runConnectionTest,
-  disconnectTelegram,
   rotateWorkerToken,
   type WorkerCheck,
 } from "@/lib/setup.functions";
@@ -125,10 +121,6 @@ function SetupConsole() {
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
   const [botToken, setBotToken] = useState("");
-  const [phone, setPhone] = useState("");
-  const [code, setCode] = useState("");
-  const [pw, setPw] = useState("");
-  const [authStage, setAuthStage] = useState<"phone" | "code" | "password">("phone");
   const [checks, setChecks] = useState<WorkerCheck[] | null>(null);
 
   useEffect(() => {
@@ -155,46 +147,12 @@ function SetupConsole() {
     onError: fail,
   });
   const mCreds = useMutation({
-    mutationFn: (v: Record<string, string>) =>
-      saveCredentials({ data: v as { apiId: string } }),
+    mutationFn: (v: Record<string, string>) => saveCredentials({ data: v as { apiId: string } }),
     onSuccess: () => {
       toast.success("Saved securely");
       setApiId("");
       setApiHash("");
       setBotToken("");
-      invalidate();
-    },
-    onError: fail,
-  });
-  const mPhone = useMutation({
-    mutationFn: (p: string) => startPhoneLogin({ data: { phone: p } }),
-    onSuccess: () => {
-      setAuthStage("code");
-      toast.success("Telegram sent you a login code");
-    },
-    onError: fail,
-  });
-  const mCode = useMutation({
-    mutationFn: (c: string) => submitPhoneCode({ data: { code: c } }),
-    onSuccess: (r) => {
-      setCode("");
-      if (r.needsPassword) {
-        setAuthStage("password");
-        toast.message("Two-factor password required");
-      } else {
-        setAuthStage("phone");
-        toast.success(r.message ?? "Connected");
-        invalidate();
-      }
-    },
-    onError: fail,
-  });
-  const mPw = useMutation({
-    mutationFn: (p: string) => submitPassword({ data: { password: p } }),
-    onSuccess: (r) => {
-      setPw("");
-      setAuthStage("phone");
-      toast.success(r.message ?? "Connected");
       invalidate();
     },
     onError: fail,
@@ -205,14 +163,6 @@ function SetupConsole() {
       setChecks(r.checks ?? null);
       if (r.ok) toast.success("All systems verified");
       else toast.error("Some checks failed");
-      invalidate();
-    },
-    onError: fail,
-  });
-  const mLogout = useMutation({
-    mutationFn: () => disconnectTelegram(),
-    onSuccess: () => {
-      toast.success("Telegram account disconnected");
       invalidate();
     },
     onError: fail,
@@ -228,7 +178,7 @@ function SetupConsole() {
 
   const s = data.worker.info?.status ?? null;
   const online = data.worker.online;
-  const ready = Boolean(online && s?.api_configured && s.bot_configured && s.session_configured);
+  const ready = Boolean(online && s?.api_configured && s.bot_configured);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
@@ -260,11 +210,7 @@ function SetupConsole() {
       </header>
 
       {/* SYSTEM READY banner */}
-      <section
-        className={
-          "panel mb-8 p-6 " + (ready ? "border-success/50" : "border-border")
-        }
-      >
+      <section className={"panel mb-8 p-6 " + (ready ? "border-success/50" : "border-border")}>
         <h2 className="font-display text-sm uppercase tracking-widest">
           {ready ? "System ready" : "Setup incomplete"}
         </h2>
@@ -282,25 +228,16 @@ function SetupConsole() {
             detail={s?.bot_username ? `@${s.bot_username}` : null}
           />
           <StatusRow
-            label="Telegram Account"
-            state={s?.session_configured ? "ok" : "fail"}
-            detail={s?.telegram_username ? `@${s.telegram_username}` : null}
-          />
-          <StatusRow label="Telegram Session" state={s?.session_configured ? "ok" : "fail"} />
-          <StatusRow
-            label="Telegram Premium"
-            state={s?.is_premium ? "ok" : "idle"}
-            detail={
-              s?.is_premium
-                ? "Shareable folder links can be generated."
-                : "Without Premium, Telegram will not issue a shareable folder link."
-            }
+            label="Telegram Accounts"
+            state="idle"
+            detail="Each user connects inside the bot with /connect."
           />
         </div>
         {ready ? (
           <p className="mt-4 rounded-md bg-success/10 p-3 text-sm text-success">
             Your Telegram Folder Merger Bot is ready. Open Telegram, message
-            {s?.bot_username ? ` @${s.bot_username}` : " your bot"} and send /addfolder.
+            {s?.bot_username ? ` @${s.bot_username}` : " your bot"}, send /connect, then send
+            /addfolder.
           </p>
         ) : null}
       </section>
@@ -383,8 +320,8 @@ function SetupConsole() {
             disabled={!online || (!apiId && !apiHash) || mCreds.isPending}
             onClick={() => {
               const v: Record<string, string> = {};
-              if (apiId) v['apiId'] = apiId;
-              if (apiHash) v['apiHash'] = apiHash;
+              if (apiId) v["apiId"] = apiId;
+              if (apiHash) v["apiHash"] = apiHash;
               mCreds.mutate(v);
             }}
           >
@@ -414,63 +351,14 @@ function SetupConsole() {
 
         <Section
           n={4}
-          title="Telegram account"
-          desc="Your personal account authorizes the folder access. The code and 2FA password go straight to Telegram through your worker — they are never stored or logged."
+          title="Telegram user accounts"
+          desc="No website login/session linking is used for Telegram accounts. Every Telegram user connects their own account inside the bot."
         >
-          {s?.session_configured ? (
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-success">
-                Connected{s.telegram_username ? ` as @${s.telegram_username}` : ""}.
-              </p>
-              <Button variant="outline" size="sm" onClick={() => mLogout.mutate()}>
-                Disconnect
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {authStage === "phone" && (
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="+15551234567"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                  />
-                  <Button
-                    disabled={!online || !phone || mPhone.isPending}
-                    onClick={() => mPhone.mutate(phone)}
-                  >
-                    Connect
-                  </Button>
-                </div>
-              )}
-              {authStage === "code" && (
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Login code from Telegram"
-                    inputMode="numeric"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                  />
-                  <Button disabled={!code || mCode.isPending} onClick={() => mCode.mutate(code)}>
-                    Verify
-                  </Button>
-                </div>
-              )}
-              {authStage === "password" && (
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder="Two-factor password"
-                    value={pw}
-                    onChange={(e) => setPw(e.target.value)}
-                  />
-                  <Button disabled={!pw || mPw.isPending} onClick={() => mPw.mutate(pw)}>
-                    Verify
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
+          <div className="rounded-md border border-border bg-secondary/40 p-3 text-sm text-muted-foreground">
+            In Telegram, open{s?.bot_username ? ` @${s.bot_username}` : " the bot"} and send{" "}
+            <code className="font-display">/connect</code>. The bot will ask for phone number, OTP,
+            and 2FA password if Telegram requires it.
+          </div>
         </Section>
 
         <Section n={5} title="Connection test" desc="Runs a real check against every component.">
@@ -480,7 +368,12 @@ function SetupConsole() {
           {checks ? (
             <div className="mt-4">
               {checks.map((c) => (
-                <StatusRow key={c.name} label={c.name} state={c.ok ? "ok" : "fail"} detail={c.detail} />
+                <StatusRow
+                  key={c.name}
+                  label={c.name}
+                  state={c.ok ? "ok" : "fail"}
+                  detail={c.detail}
+                />
               ))}
             </div>
           ) : null}
@@ -507,14 +400,16 @@ function SetupConsole() {
           <div>
             <dt className="font-medium text-foreground">How authorization works</dt>
             <dd>
-              The worker opens a Telegram login for your phone number; you enter the code (and 2FA
-              password if set) on this page. Those values are used in memory only.
+              The worker opens a Telegram login only after a bot user sends{" "}
+              <code className="font-display">/connect</code>. Phone numbers, OTP codes, and 2FA
+              passwords are used in memory only and are never stored.
             </dd>
           </div>
           <div>
             <dt className="font-medium text-foreground">Using the bot</dt>
             <dd>
-              Send <code className="font-display">/addfolder</code>, then your{" "}
+              Send <code className="font-display">/connect</code> once. After connecting, send{" "}
+              <code className="font-display">/addfolder</code>, then your{" "}
               <code className="font-display">t.me/addlist/…</code> links one per line, then a folder
               name (or <code className="font-display">-</code>). The bot reports real per-folder
               counts, duplicates, exclusions and the final link.

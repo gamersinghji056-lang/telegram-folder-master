@@ -1,7 +1,7 @@
 import http from "node:http";
 
 import { api } from "./api.js";
-import { state, loadConfig, saveCredentials, sendCode, signInWithCode, signInWithPassword, logout, getClient } from "./tg.js";
+import { state, loadConfig, saveCredentials } from "./tg.js";
 import { startBot, restartBot, botUsername, botError } from "./bot.js";
 
 const PORT = Number(process.env.PORT || 8080);
@@ -12,10 +12,10 @@ function statusPayload() {
     running: true,
     api_configured: Boolean(state.apiId && state.apiHash),
     bot_configured: Boolean(state.botToken && botUsername),
-    session_configured: Boolean(state.session && state.me),
+    session_configured: false,
     bot_username: botUsername ?? null,
-    telegram_username: state.me?.username ?? null,
-    is_premium: Boolean(state.me?.premium),
+    telegram_username: null,
+    is_premium: false,
   };
 }
 
@@ -54,20 +54,11 @@ async function selfTest() {
     checks.push({ name: "Telegram API", ok: false, detail: "API ID / API hash missing." });
   }
 
-  let me = null;
-  try {
-    const client = await getClient();
-    me = await client.getMe();
-    checks.push({
-      name: "Telegram account",
-      ok: true,
-      detail: me.username ? `Authorized as @${me.username}.` : "Authorized.",
-    });
-    checks.push({ name: "Telegram session", ok: true, detail: "Session is valid and connected." });
-  } catch (e) {
-    checks.push({ name: "Telegram account", ok: false, detail: e.message });
-    checks.push({ name: "Telegram session", ok: false, detail: "No valid session." });
-  }
+  checks.push({
+    name: "Telegram accounts",
+    ok: true,
+    detail: "Each Telegram user connects their own account in the bot with /connect.",
+  });
 
   if (botUsername) {
     checks.push({ name: "Telegram bot", ok: true, detail: `Listening as @${botUsername}.` });
@@ -87,21 +78,17 @@ const handlers = {
     await pushStatus();
     return { ok: true, status: statusPayload() };
   },
-  sendCode: async (p) => sendCode(p.phone),
-  signIn: async (p) => {
-    const r = await signInWithCode(p.code);
-    if (!r.needsPassword) await pushStatus();
-    return { ...r, status: statusPayload() };
+  sendCode: async () => {
+    throw new Error("Telegram account connection now happens inside the bot with /connect.");
   },
-  checkPassword: async (p) => {
-    const r = await signInWithPassword(p.password);
-    await pushStatus();
-    return { ...r, status: statusPayload() };
+  signIn: async () => {
+    throw new Error("Telegram account connection now happens inside the bot with /connect.");
+  },
+  checkPassword: async () => {
+    throw new Error("Telegram account connection now happens inside the bot with /connect.");
   },
   logout: async () => {
-    const r = await logout();
-    await pushStatus();
-    return { ...r, status: statusPayload() };
+    throw new Error("Telegram account disconnection is managed per Telegram user in the bot.");
   },
   selfTest: async () => selfTest(),
 };
@@ -118,7 +105,8 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && (path === "/health" || path === "/")) {
     return json(res, 200, { ok: true });
   }
-  if (req.method !== "POST" || !req.url?.startsWith("/rpc")) return json(res, 404, { error: "not_found" });
+  if (req.method !== "POST" || !req.url?.startsWith("/rpc"))
+    return json(res, 404, { error: "not_found" });
 
   const auth = req.headers["authorization"] || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
@@ -164,11 +152,6 @@ async function init() {
     await loadConfig();
   } catch (e) {
     console.error("could not load config:", e.message);
-  }
-  try {
-    if (state.session) await getClient();
-  } catch (e) {
-    console.error("session not usable:", e.message);
   }
   await startBot();
   await pushStatus();

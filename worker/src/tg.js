@@ -69,17 +69,11 @@ export async function loadConfig() {
 
   if (!config) return;
 
-  state.apiId = config.api_id_enc
-    ? Number(decrypt(config.api_id_enc))
-    : null;
+  state.apiId = config.api_id_enc ? Number(decrypt(config.api_id_enc)) : null;
 
-  state.apiHash = config.api_hash_enc
-    ? decrypt(config.api_hash_enc)
-    : null;
+  state.apiHash = config.api_hash_enc ? decrypt(config.api_hash_enc) : null;
 
-  state.botToken = config.bot_token_enc
-    ? decrypt(config.bot_token_enc)
-    : null;
+  state.botToken = config.bot_token_enc ? decrypt(config.bot_token_enc) : null;
 }
 
 /**
@@ -117,9 +111,7 @@ export async function saveCredentials({ apiId, apiHash, botToken }) {
  */
 function assertApiConfig() {
   if (!state.apiId || !state.apiHash) {
-    throw new Error(
-      "Telegram API ID / API hash are not configured on the worker.",
-    );
+    throw new Error("Telegram API ID / API hash are not configured on the worker.");
   }
 }
 
@@ -196,9 +188,7 @@ export async function getClient(botUserId) {
   const stored = await loadUserSession(Number(key));
 
   if (!stored?.session_enc) {
-    throw new Error(
-      "Your Telegram account is not connected yet. Use /connect first.",
-    );
+    throw new Error("Your Telegram account is not connected yet. Use /connect first.");
   }
 
   let session;
@@ -212,17 +202,10 @@ export async function getClient(botUserId) {
   }
 
   if (!session) {
-    throw new Error(
-      "Your Telegram session is empty. Please reconnect with /connect.",
-    );
+    throw new Error("Your Telegram session is empty. Please reconnect with /connect.");
   }
 
-  const client = new TelegramClient(
-    new StringSession(session),
-    state.apiId,
-    state.apiHash,
-    opts(),
-  );
+  const client = new TelegramClient(new StringSession(session), state.apiId, state.apiHash, opts());
 
   client.setLogLevel?.("error");
 
@@ -233,9 +216,7 @@ export async function getClient(botUserId) {
   if (!authorized) {
     clients.delete(key);
 
-    throw new Error(
-      "Your Telegram session has expired. Please use /connect again.",
-    );
+    throw new Error("Your Telegram session has expired. Please use /connect again.");
   }
 
   clients.set(key, client);
@@ -259,11 +240,7 @@ export async function isUserConnected(botUserId) {
   try {
     const client = await getClient(botUserId);
 
-    return Boolean(
-      client &&
-        client.connected &&
-        (await client.isUserAuthorized()),
-    );
+    return Boolean(client && client.connected && (await client.isUserAuthorized()));
   } catch {
     return false;
   }
@@ -282,7 +259,7 @@ export async function isUserConnected(botUserId) {
  *    ↓
  * signInWithCode()
  */
-export async function sendCode(botUserId, phone) {
+export async function sendCode(botUserId, phone, botChatId = null) {
   assertApiConfig();
 
   const key = userKey(botUserId);
@@ -290,9 +267,7 @@ export async function sendCode(botUserId, phone) {
   const cleanPhone = String(phone ?? "").trim();
 
   if (!cleanPhone) {
-    throw new Error(
-      "Please send your phone number with country code. Example: +919876543210",
-    );
+    throw new Error("Please send your phone number with country code. Example: +919876543210");
   }
 
   /**
@@ -309,12 +284,7 @@ export async function sendCode(botUserId, phone) {
   /**
    * Create a completely new MTProto client.
    */
-  const client = new TelegramClient(
-    new StringSession(""),
-    state.apiId,
-    state.apiHash,
-    opts(),
-  );
+  const client = new TelegramClient(new StringSession(""), state.apiId, state.apiHash, opts());
 
   client.setLogLevel?.("error");
 
@@ -341,6 +311,7 @@ export async function sendCode(botUserId, phone) {
   logins.set(key, {
     client,
     phone: cleanPhone,
+    botChatId,
     phoneCodeHash: result.phoneCodeHash,
     createdAt: Date.now(),
   });
@@ -361,9 +332,7 @@ export async function signInWithCode(botUserId, code) {
   const login = logins.get(key);
 
   if (!login) {
-    throw new Error(
-      "No active Telegram login request. Please use /connect again.",
-    );
+    throw new Error("No active Telegram login request. Please use /connect again.");
   }
 
   const cleanCode = String(code ?? "").trim();
@@ -410,9 +379,7 @@ export async function signInWithPassword(botUserId, password) {
   const login = logins.get(key);
 
   if (!login) {
-    throw new Error(
-      "No active Telegram login request. Please use /connect again.",
-    );
+    throw new Error("No active Telegram login request. Please use /connect again.");
   }
 
   const cleanPassword = String(password ?? "");
@@ -424,14 +391,9 @@ export async function signInWithPassword(botUserId, password) {
   const { client } = login;
 
   try {
-    const pwd = await client.invoke(
-      new Api.account.GetPassword(),
-    );
+    const pwd = await client.invoke(new Api.account.GetPassword());
 
-    const passwordCheck = await computeCheck(
-      pwd,
-      cleanPassword,
-    );
+    const passwordCheck = await computeCheck(pwd, cleanPassword);
 
     await client.invoke(
       new Api.auth.CheckPassword({
@@ -439,13 +401,7 @@ export async function signInWithPassword(botUserId, password) {
       }),
     );
   } catch (e) {
-    throw new Error(
-      friendlyAuthError(
-        e?.errorMessage ||
-          e?.message ||
-          "",
-      ),
-    );
+    throw new Error(friendlyAuthError(e?.errorMessage || e?.message || ""));
   }
 
   return finishLogin(botUserId);
@@ -460,17 +416,13 @@ async function finishLogin(botUserId) {
   const login = logins.get(key);
 
   if (!login) {
-    throw new Error(
-      "Login session disappeared. Please use /connect again.",
-    );
+    throw new Error("Login session disappeared. Please use /connect again.");
   }
 
-  const { client, phone } = login;
+  const { client, phone, botChatId } = login;
 
   if (!(await client.isUserAuthorized())) {
-    throw new Error(
-      "Telegram authorization was not completed.",
-    );
+    throw new Error("Telegram authorization was not completed.");
   }
 
   const session = client.session.save();
@@ -483,6 +435,7 @@ async function finishLogin(botUserId) {
    * The raw StringSession never leaves this worker.
    */
   await saveUserSession(botUserId, {
+    bot_chat_id: botChatId,
     phone,
     session_enc: encrypt(session),
     telegram_account_id: Number(me.id),
@@ -503,9 +456,7 @@ async function finishLogin(botUserId) {
     username: me.username || null,
     firstName: me.firstName || null,
     message: `Connected as ${
-      me.username
-        ? "@" + me.username
-        : me.firstName || "your Telegram account"
+      me.username ? "@" + me.username : me.firstName || "your Telegram account"
     }.`,
   };
 }
@@ -523,9 +474,7 @@ export async function logout(botUserId) {
   if (client) {
     try {
       if (client.connected) {
-        await client.invoke(
-          new Api.auth.LogOut(),
-        );
+        await client.invoke(new Api.auth.LogOut());
       }
     } catch {
       /**
@@ -618,26 +567,14 @@ export async function withFloodWait(fn, onWait) {
     try {
       return await fn();
     } catch (e) {
-      const seconds =
-        e?.seconds ??
-        e?.errorMessage?.match?.(
-          /FLOOD_WAIT_(\d+)/,
-        )?.[1];
+      const seconds = e?.seconds ?? e?.errorMessage?.match?.(/FLOOD_WAIT_(\d+)/)?.[1];
 
-      if (
-        seconds &&
-        Number(seconds) <= 3600
-      ) {
+      if (seconds && Number(seconds) <= 3600) {
         const waitSeconds = Number(seconds);
 
         await onWait?.(waitSeconds);
 
-        await new Promise((resolve) =>
-          setTimeout(
-            resolve,
-            (waitSeconds + 2) * 1000,
-          ),
-        );
+        await new Promise((resolve) => setTimeout(resolve, (waitSeconds + 2) * 1000));
 
         continue;
       }
@@ -646,9 +583,7 @@ export async function withFloodWait(fn, onWait) {
     }
   }
 
-  throw new Error(
-    "Telegram rate limit did not clear.",
-  );
+  throw new Error("Telegram rate limit did not clear.");
 }
 
 /**
@@ -657,53 +592,36 @@ export async function withFloodWait(fn, onWait) {
 function friendlyAuthError(msg) {
   const text = String(msg || "");
 
-  if (
-    text.includes("PHONE_CODE_INVALID")
-  ) {
+  if (text.includes("PHONE_CODE_INVALID")) {
     return "That Telegram login code is not correct.";
   }
 
-  if (
-    text.includes("PHONE_CODE_EXPIRED")
-  ) {
+  if (text.includes("PHONE_CODE_EXPIRED")) {
     return "That Telegram login code expired. Please use /connect and request a new code.";
   }
 
-  if (
-    text.includes("PHONE_NUMBER_INVALID")
-  ) {
+  if (text.includes("PHONE_NUMBER_INVALID")) {
     return "That phone number is not valid. Include the country code, for example +919876543210.";
   }
 
-  if (
-    text.includes("PHONE_NUMBER_BANNED")
-  ) {
+  if (text.includes("PHONE_NUMBER_BANNED")) {
     return "This Telegram phone number is banned.";
   }
 
-  if (
-    text.includes("PHONE_NUMBER_FLOOD")
-  ) {
+  if (text.includes("PHONE_NUMBER_FLOOD")) {
     return "Telegram temporarily blocked login attempts for this number. Please try again later.";
   }
 
-  if (
-    text.includes("PASSWORD_HASH_INVALID")
-  ) {
+  if (text.includes("PASSWORD_HASH_INVALID")) {
     return "That Telegram 2FA password is not correct.";
   }
 
-  if (
-    text.includes("SESSION_PASSWORD_NEEDED")
-  ) {
+  if (text.includes("SESSION_PASSWORD_NEEDED")) {
     return "This Telegram account requires its 2FA password.";
   }
 
-  if (
-    text.includes("FLOOD_WAIT")
-  ) {
-    const seconds =
-      text.match(/FLOOD_WAIT_(\d+)/)?.[1];
+  if (text.includes("FLOOD_WAIT")) {
+    const seconds = text.match(/FLOOD_WAIT_(\d+)/)?.[1];
 
     if (seconds) {
       return `Telegram rate limit reached. Try again in ${seconds} seconds.`;
@@ -712,21 +630,15 @@ function friendlyAuthError(msg) {
     return "Telegram rate limit reached. Please try again later.";
   }
 
-  if (
-    text.includes("AUTH_KEY_UNREGISTERED")
-  ) {
+  if (text.includes("AUTH_KEY_UNREGISTERED")) {
     return "Telegram authorization expired. Please use /connect again.";
   }
 
-  if (
-    text.includes("USER_DEACTIVATED")
-  ) {
+  if (text.includes("USER_DEACTIVATED")) {
     return "This Telegram account has been deactivated.";
   }
 
-  if (
-    text.includes("NETWORK_MIGRATE")
-  ) {
+  if (text.includes("NETWORK_MIGRATE")) {
     return "Telegram requested a connection migration. Please try again.";
   }
 

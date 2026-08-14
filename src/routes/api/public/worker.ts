@@ -31,10 +31,27 @@ const chatSchema = z.object({
   access_status: z.enum(ACCESS_STATUSES).default("UNKNOWN"),
 });
 
+const botUserIdSchema = z.number().int().positive().safe();
+
+const userSessionSchema = z.object({
+  bot_user_id: botUserIdSchema,
+  bot_chat_id: z.number().int().safe().optional().nullable(),
+  phone: z.string().max(32).optional().nullable(),
+  session_enc: z.string().min(1).max(20_000),
+  telegram_account_id: z.number().int().safe().optional().nullable(),
+  telegram_username: z.string().max(128).optional().nullable(),
+  first_name: z.string().max(128).optional().nullable(),
+  last_name: z.string().max(128).optional().nullable(),
+  is_premium: z.boolean().optional(),
+});
+
 const bodySchema = z.object({
   action: z.string().min(1).max(64),
   payload: z.record(z.string(), z.unknown()).default({}),
 });
+
+type CanonicalChatRow = { id: string; telegram_chat_id: number };
+type JobChatTotalRow = { is_duplicate: boolean; eligible: boolean; access_status: string };
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -72,6 +89,11 @@ export const Route = createFileRoute("/api/public/worker")({
           .eq("user_id", userId);
 
         const p = payload as Record<string, unknown>;
+        const db = supabaseAdmin as never as {
+          // New multi-user worker tables may not exist in generated Supabase types yet.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          from: (table: string) => any;
+        };
 
         switch (action) {
           case "heartbeat":
@@ -128,13 +150,55 @@ export const Route = createFileRoute("/api/public/worker")({
             return json({ ok: true });
           }
 
+          case "pullUserSession": {
+            const botUserId = botUserIdSchema.parse(p["bot_user_id"]);
+            const { data, error } = await db
+              .from("telegram_user_sessions")
+              .select(
+                "bot_user_id, bot_chat_id, phone, session_enc, telegram_account_id, telegram_username, first_name, last_name, is_premium, last_connected_at",
+              )
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
+              .maybeSingle();
+            if (error) return json({ error: error.message }, 500);
+            return json({ ok: true, session: data ?? null });
+          }
+
+          case "saveUserSession": {
+            const data = userSessionSchema.parse(p);
+            const { error } = await db.from("telegram_user_sessions").upsert(
+              {
+                user_id: userId,
+                ...data,
+                last_connected_at: new Date().toISOString(),
+              },
+              { onConflict: "user_id,bot_user_id" },
+            );
+            if (error) return json({ error: error.message }, 500);
+            return json({ ok: true });
+          }
+
+          case "deleteUserSession": {
+            const botUserId = botUserIdSchema.parse(p["bot_user_id"]);
+            const { error } = await db
+              .from("telegram_user_sessions")
+              .delete()
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId);
+            if (error) return json({ error: error.message }, 500);
+            return json({ ok: true });
+          }
+
           case "createJob": {
+            const botUserId = botUserIdSchema.parse(p["bot_user_id"]);
             const urls = z.array(z.string().max(400)).min(1).max(100).parse(p["urls"]);
-            const { data: job, error } = await supabaseAdmin
+            const { data: job, error } = await db
               .from("jobs")
               .insert({
                 user_id: userId,
-                bot_chat_id: typeof p["bot_chat_id"] === "number" ? (p["bot_chat_id"] as number) : null,
+                bot_user_id: botUserId,
+                bot_chat_id:
+                  typeof p["bot_chat_id"] === "number" ? (p["bot_chat_id"] as number) : null,
                 status: "RUNNING",
                 stage: "Starting",
                 folders_total: urls.length,
@@ -143,12 +207,13 @@ export const Route = createFileRoute("/api/public/worker")({
               .single();
             if (error || !job) return json({ error: error?.message ?? "insert_failed" }, 500);
 
-            const { data: folders, error: fErr } = await supabaseAdmin
+            const { data: folders, error: fErr } = await db
               .from("job_folders")
               .insert(
                 urls.map((url, i) => ({
                   job_id: job.id,
                   user_id: userId,
+                  bot_user_id: botUserId,
                   position: i + 1,
                   url,
                 })),
@@ -189,15 +254,29 @@ export const Route = createFileRoute("/api/public/worker")({
           case "recordFolderChats": {
             const jobId = z.string().uuid().parse(p["job_id"]);
             const folderId = z.string().uuid().parse(p["folder_id"]);
-            const chats = z.array(chatSchema).max(2000).parse(p["chats"] ?? []);
+            const chats = z
+              .array(chatSchema)
+              .max(2000)
+              .parse(p["chats"] ?? []);
             if (chats.length === 0) return json({ ok: true, inserted: 0, duplicates: 0 });
+
+            const { data: job, error: jobErr } = await db
+              .from("jobs")
+              .select("bot_user_id")
+              .eq("id", jobId)
+              .eq("user_id", userId)
+              .maybeSingle();
+            if (jobErr) return json({ error: jobErr.message }, 500);
+            if (!job) return json({ error: "job_not_found" }, 404);
+            const botUserId = Number(job.bot_user_id);
 
             const ids = chats.map((c) => c.telegram_chat_id);
 
-            // canonical chat rows: unique on (user_id, telegram_chat_id)
-            const { error: upErr } = await supabaseAdmin.from("chats").upsert(
+            // Canonical chat rows are unique per bot user and Telegram chat ID.
+            const { error: upErr } = await db.from("chats").upsert(
               chats.map((c) => ({
                 user_id: userId,
+                bot_user_id: botUserId,
                 telegram_chat_id: c.telegram_chat_id,
                 access_hash: c.access_hash ?? null,
                 title: c.title ?? null,
@@ -205,24 +284,35 @@ export const Route = createFileRoute("/api/public/worker")({
                 chat_type: c.chat_type,
                 access_status: c.access_status,
               })),
-              { onConflict: "user_id,telegram_chat_id" },
+              { onConflict: "user_id,bot_user_id,telegram_chat_id" },
             );
             if (upErr) return json({ error: upErr.message }, 500);
 
-            const { data: canonical } = await supabaseAdmin
+            const { data: canonical } = await db
               .from("chats")
               .select("id, telegram_chat_id")
               .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
               .in("telegram_chat_id", ids);
-            const byTg = new Map((canonical ?? []).map((c) => [Number(c.telegram_chat_id), c.id]));
+            const canonicalRows = (canonical ?? []) as CanonicalChatRow[];
+            const byTg = new Map(
+              canonicalRows.map((c: CanonicalChatRow) => [Number(c.telegram_chat_id), c.id]),
+            );
 
             // already seen earlier in this same job => duplicate
-            const { data: seen } = await supabaseAdmin
+            const { data: seen } = await db
               .from("job_chats")
               .select("telegram_chat_id")
               .eq("job_id", jobId)
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
               .in("telegram_chat_id", ids);
-            const seenSet = new Set((seen ?? []).map((r) => Number(r.telegram_chat_id)));
+            const seenRows = (seen ?? []) as Pick<CanonicalChatRow, "telegram_chat_id">[];
+            const seenSet = new Set(
+              seenRows.map((r: Pick<CanonicalChatRow, "telegram_chat_id">) =>
+                Number(r.telegram_chat_id),
+              ),
+            );
 
             let duplicates = 0;
             const rows: Record<string, unknown>[] = [];
@@ -235,6 +325,7 @@ export const Route = createFileRoute("/api/public/worker")({
               rows.push({
                 job_id: jobId,
                 user_id: userId,
+                bot_user_id: botUserId,
                 folder_id: folderId,
                 chat_id: chatId,
                 telegram_chat_id: c.telegram_chat_id,
@@ -243,7 +334,7 @@ export const Route = createFileRoute("/api/public/worker")({
                 access_status: c.access_status,
               });
             }
-            const { error: jcErr } = await supabaseAdmin
+            const { error: jcErr } = await db
               .from("job_chats")
               .upsert(rows as never, { onConflict: "job_id,folder_id,telegram_chat_id" });
             if (jcErr) return json({ error: jcErr.message }, 500);
@@ -255,15 +346,27 @@ export const Route = createFileRoute("/api/public/worker")({
             const jobId = z.string().uuid().parse(p["job_id"]);
             const tgId = z.number().parse(p["telegram_chat_id"]);
             const status = z.enum(ACCESS_STATUSES).parse(p["access_status"]);
-            await supabaseAdmin
+            const { data: job, error: jobErr } = await db
+              .from("jobs")
+              .select("bot_user_id")
+              .eq("id", jobId)
+              .eq("user_id", userId)
+              .maybeSingle();
+            if (jobErr) return json({ error: jobErr.message }, 500);
+            if (!job) return json({ error: "job_not_found" }, 404);
+            const botUserId = Number(job.bot_user_id);
+            await db
               .from("chats")
               .update({ access_status: status })
               .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
               .eq("telegram_chat_id", tgId);
-            await supabaseAdmin
+            await db
               .from("job_chats")
               .update({ access_status: status, eligible: status === "ACCESSIBLE" })
               .eq("job_id", jobId)
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
               .eq("telegram_chat_id", tgId)
               .eq("is_duplicate", false);
             return json({ ok: true });
@@ -272,10 +375,11 @@ export const Route = createFileRoute("/api/public/worker")({
           /** Final unique + eligible chats for this job. */
           case "finalChats": {
             const jobId = z.string().uuid().parse(p["job_id"]);
-            const { data } = await supabaseAdmin
+            const { data } = await db
               .from("job_chats")
               .select("telegram_chat_id, chats!inner(access_hash, chat_type, title)")
               .eq("job_id", jobId)
+              .eq("user_id", userId)
               .eq("is_duplicate", false)
               .eq("eligible", true);
             return json({ ok: true, chats: data ?? [] });
@@ -283,11 +387,12 @@ export const Route = createFileRoute("/api/public/worker")({
 
           case "jobTotals": {
             const jobId = z.string().uuid().parse(p["job_id"]);
-            const { data } = await supabaseAdmin
+            const { data } = await db
               .from("job_chats")
               .select("is_duplicate, eligible, access_status")
-              .eq("job_id", jobId);
-            const rows = data ?? [];
+              .eq("job_id", jobId)
+              .eq("user_id", userId);
+            const rows = (data ?? []) as JobChatTotalRow[];
             return json({
               ok: true,
               totals: {
