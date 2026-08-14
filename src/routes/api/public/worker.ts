@@ -330,7 +330,9 @@ export const Route = createFileRoute("/api/public/worker")({
                 chat_id: chatId,
                 telegram_chat_id: c.telegram_chat_id,
                 is_duplicate: isDup,
-                eligible: !isDup && c.access_status === "ACCESSIBLE",
+                eligible:
+                  !isDup &&
+                  (c.access_status === "ACCESSIBLE" || c.access_status === "JOIN_REQUIRED"),
                 access_status: c.access_status,
               });
             }
@@ -363,13 +365,62 @@ export const Route = createFileRoute("/api/public/worker")({
               .eq("telegram_chat_id", tgId);
             await db
               .from("job_chats")
-              .update({ access_status: status, eligible: status === "ACCESSIBLE" })
+              .update({
+                access_status: status,
+                eligible: status === "ACCESSIBLE" || status === "JOIN_REQUIRED",
+              })
               .eq("job_id", jobId)
               .eq("user_id", userId)
               .eq("bot_user_id", botUserId)
               .eq("telegram_chat_id", tgId)
               .eq("is_duplicate", false);
             return json({ ok: true });
+          }
+
+          case "jobAnalysisDetails": {
+            const jobId = z.string().uuid().parse(p["job_id"]);
+            const requestedBotUserId =
+              typeof p["bot_user_id"] === "number" ? botUserIdSchema.parse(p["bot_user_id"]) : null;
+            const { data: job, error: jobErr } = await db
+              .from("jobs")
+              .select("id, bot_user_id, status")
+              .eq("id", jobId)
+              .eq("user_id", userId)
+              .maybeSingle();
+            if (jobErr) return json({ error: jobErr.message }, 500);
+            if (!job) return json({ error: "job_not_found" }, 404);
+            const botUserId = Number(job.bot_user_id);
+            if (requestedBotUserId !== null && requestedBotUserId !== botUserId) {
+              return json({ error: "job_not_found" }, 404);
+            }
+
+            const { data: folders, error: foldersErr } = await db
+              .from("job_folders")
+              .select("id, position, url, slug, title, status, chats_found, error")
+              .eq("job_id", jobId)
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
+              .order("position", { ascending: true });
+            if (foldersErr) return json({ error: foldersErr.message }, 500);
+
+            const { data: groups, error: groupsErr } = await db
+              .from("job_chats")
+              .select(
+                "folder_id, telegram_chat_id, access_status, eligible, is_duplicate, chats!inner(access_hash, chat_type, title, username)",
+              )
+              .eq("job_id", jobId)
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
+              .eq("is_duplicate", false)
+              .eq("eligible", true);
+            if (groupsErr) return json({ error: groupsErr.message }, 500);
+
+            return json({
+              ok: true,
+              job,
+              folders: folders ?? [],
+              groups: groups ?? [],
+            });
           }
 
           /** Final unique + eligible chats for this job. */

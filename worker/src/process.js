@@ -3,11 +3,8 @@ import { Api, getClient, withFloodWait } from "./tg.js";
 
 const SLUG_RE = /(?:t\.me|telegram\.me)\/(?:addlist|list)\/([A-Za-z0-9_-]+)/i;
 
-const TEST_MESSAGE = "hey";
-const TEST_DELAY_MS = 2000;
-
 export function parseFolderLink(raw) {
-  const line = raw.trim();
+  const line = String(raw ?? "").trim();
   if (!line) return null;
 
   const m = line.match(SLUG_RE);
@@ -15,9 +12,31 @@ export function parseFolderLink(raw) {
   return m ? { url: line, slug: m[1] } : { url: line, slug: null };
 }
 
-/**
- * Convert Telegram entity into an InputPeer.
- */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function telegramError(error) {
+  return error?.errorMessage || error?.message || String(error || "");
+}
+
+function titleText(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  if (typeof value.text === "string") return value.text;
+  return null;
+}
+
+function peerId(peer) {
+  if (peer instanceof Api.PeerChannel) return Number(peer.channelId);
+  if (peer instanceof Api.PeerChat) return Number(peer.chatId);
+  return null;
+}
+
+function chatId(chat) {
+  return Number(chat.id);
+}
+
 function peerOf(chat) {
   if (chat instanceof Api.Channel || chat instanceof Api.ChannelForbidden) {
     if (!chat.accessHash) return null;
@@ -37,9 +56,34 @@ function peerOf(chat) {
   return null;
 }
 
-/**
- * Telegram chat type.
- */
+function peerFromRow(row) {
+  const chat = Array.isArray(row.chats) ? row.chats[0] : row.chats;
+  const id = Number(row.telegram_chat_id);
+  const type = String(chat?.chat_type || row.chat_type || "UNKNOWN");
+  const accessHash = chat?.access_hash ? BigInt(chat.access_hash) : null;
+
+  if ((type === "SUPERGROUP" || type === "CHANNEL") && accessHash) {
+    return new Api.InputPeerChannel({
+      channelId: id,
+      accessHash,
+    });
+  }
+
+  if (type === "GROUP") {
+    return new Api.InputPeerChat({ chatId: id });
+  }
+
+  return null;
+}
+
+function inputChannelFromPeer(peer) {
+  if (!(peer instanceof Api.InputPeerChannel)) return null;
+  return new Api.InputChannel({
+    channelId: peer.channelId,
+    accessHash: peer.accessHash,
+  });
+}
+
 function typeOf(chat) {
   if (chat instanceof Api.Channel) {
     return chat.broadcast ? "CHANNEL" : "SUPERGROUP";
@@ -56,32 +100,16 @@ function typeOf(chat) {
   return "UNKNOWN";
 }
 
-/**
- * Initial status based only on Telegram's actual entity.
- */
-function initialStatus(chat) {
-  if (chat instanceof Api.ChannelForbidden || chat instanceof Api.ChatForbidden) {
+function excludedStatus(chat, peer) {
+  if (!peer) return "INACCESSIBLE";
+  if (chat instanceof Api.ChannelForbidden || chat instanceof Api.ChatForbidden)
     return "NO_PERMISSION";
-  }
-
-  if (chat.deactivated) {
-    return "DEACTIVATED";
-  }
-
-  if (chat.left === false) {
-    return "ACCESSIBLE";
-  }
-
-  return "UNKNOWN";
+  if (chat.deactivated) return "DEACTIVATED";
+  return null;
 }
 
-/**
- * Convert Telegram errors into our internal access statuses.
- */
 function classifyError(msg) {
-  if (!msg) return "UNKNOWN";
-
-  const upper = String(msg).toUpperCase();
+  const upper = String(msg || "").toUpperCase();
 
   if (
     upper.includes("USER_BANNED_IN_CHANNEL") ||
@@ -96,17 +124,10 @@ function classifyError(msg) {
   if (
     upper.includes("CHANNEL_PRIVATE") ||
     upper.includes("CHANNEL_INVALID") ||
-    upper.includes("PEER_ID_INVALID")
+    upper.includes("PEER_ID_INVALID") ||
+    upper.includes("CHAT_ID_INVALID")
   ) {
     return "INACCESSIBLE";
-  }
-
-  if (upper.includes("CHAT_ID_INVALID") || upper.includes("MESSAGE_ID_INVALID")) {
-    return "INACCESSIBLE";
-  }
-
-  if (upper.includes("INVITE_REQUEST_SENT") || upper.includes("JOIN_REQUEST")) {
-    return "JOIN_REQUIRED";
   }
 
   if (upper.includes("INVITE_HASH_EXPIRED") || upper.includes("INVITE_SLUG_EXPIRED")) {
@@ -117,300 +138,125 @@ function classifyError(msg) {
     return "DEACTIVATED";
   }
 
-  if (upper.includes("USER_DEACTIVATED") || upper.includes("AUTH_KEY_UNREGISTERED")) {
-    return "DEACTIVATED";
-  }
+  if (upper.includes("FLOOD_WAIT")) return "UNKNOWN";
 
   return "UNKNOWN";
 }
 
-/**
- * Human-readable folder errors.
- */
 function folderErrorMessage(msg) {
-  if (!msg) return "Telegram API error.";
+  const upper = String(msg || "").toUpperCase();
 
-  const upper = String(msg).toUpperCase();
-
-  if (upper.includes("INVITE_SLUG_EXPIRED")) {
-    return "Folder link expired or was revoked.";
-  }
-
+  if (upper.includes("INVITE_SLUG_EXPIRED")) return "Folder link expired or was revoked.";
   if (upper.includes("INVITE_SLUG_EMPTY") || upper.includes("SLUG_INVALID")) {
     return "Invalid folder link.";
   }
-
   if (upper.includes("CHATLISTS_TOO_MUCH")) {
     return "Telegram folder/share-list limit reached on this account.";
   }
-
-  if (upper.includes("AUTH_KEY") || upper.includes("SESSION")) {
+  if (upper.includes("AUTH_KEY") || upper.includes("SESSION"))
     return "Telegram authorization required.";
-  }
+  if (upper.includes("FLOOD_WAIT")) return msg;
 
-  if (upper.includes("FLOOD_WAIT")) {
-    return "Telegram rate limit.";
-  }
-
-  return msg;
+  return msg || "Telegram API error.";
 }
 
-/**
- * Sleep helper.
- */
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+function chatRowsFromInvite(invite) {
+  const byId = new Map((invite.chats ?? []).map((chat) => [chatId(chat), chat]));
+  const alreadyIds = new Set();
+  const candidates = [];
 
-/**
- * Try to send the test message.
- *
- * Returns:
- * {
- *   ok: true,
- *   messageId
- * }
- *
- * or:
- * {
- *   ok: false,
- *   status,
- *   error
- * }
- */
-async function testWriteAccess(client, peer, report) {
-  try {
-    const sent = await withFloodWait(
-      () =>
-        client.invoke(
-          new Api.messages.SendMessage({
-            peer,
-            message: TEST_MESSAGE,
-            randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)),
-          }),
-        ),
-      (seconds) =>
-        report?.(`Telegram rate limit detected.\nWaiting ${seconds}s before continuing.`),
-    );
-
-    /**
-     * Try to find the sent message ID.
-     *
-     * Telegram can return:
-     * - UpdateShortSentMessage
-     * - Updates
-     * - UpdatesCombined
-     *
-     * We handle the common cases.
-     */
-    let messageId = null;
-
-    if (sent?.id) {
-      messageId = Number(sent.id);
+  if (invite instanceof Api.chatlists.ChatlistInviteAlready) {
+    for (const p of invite.alreadyPeers ?? []) {
+      const id = peerId(p);
+      if (id !== null) alreadyIds.add(id);
+      candidates.push(p);
     }
 
-    if (!messageId && Array.isArray(sent?.updates)) {
-      for (const update of sent.updates) {
-        if (update?.message?.id) {
-          messageId = Number(update.message.id);
-          break;
-        }
-
-        if (update?.id) {
-          messageId = Number(update.id);
-          break;
-        }
-      }
+    for (const p of invite.missingPeers ?? []) {
+      candidates.push(p);
     }
-
-    return {
-      ok: true,
-      messageId,
-      raw: sent,
-    };
-  } catch (e) {
-    const error = e?.errorMessage || e?.message || String(e);
-
-    return {
-      ok: false,
-      status: classifyError(error),
-      error,
-    };
-  }
-}
-
-/**
- * Delete our temporary "hey" message.
- *
- * Failure to delete does NOT make the chat inaccessible because
- * the message was already successfully sent.
- */
-async function deleteTestMessage(client, peer, messageId, report) {
-  if (!messageId) {
-    return false;
-  }
-
-  try {
-    if (peer instanceof Api.InputPeerChannel) {
-      await withFloodWait(
-        () =>
-          client.invoke(
-            new Api.channels.DeleteMessages({
-              channel: new Api.InputChannel({
-                channelId: peer.channelId,
-                accessHash: peer.accessHash,
-              }),
-              id: [messageId],
-            }),
-          ),
-        (seconds) =>
-          report?.(
-            `Telegram rate limit detected.\nWaiting ${seconds}s before deleting test message.`,
-          ),
-      );
-    } else {
-      await withFloodWait(
-        () =>
-          client.invoke(
-            new Api.messages.DeleteMessages({
-              id: [messageId],
-              revoke: true,
-            }),
-          ),
-        (seconds) =>
-          report?.(
-            `Telegram rate limit detected.\nWaiting ${seconds}s before deleting test message.`,
-          ),
-      );
+  } else {
+    for (const p of invite.peers ?? []) {
+      candidates.push(p);
     }
-
-    return true;
-  } catch (e) {
-    console.error("Could not delete test message:", e?.errorMessage || e?.message || e);
-
-    return false;
   }
-}
 
-/**
- * Verify every collected chat by actually attempting to send "hey".
- *
- * This is intentionally sequential and waits 2 seconds between chats.
- */
-async function verifyChats({ client, jobId, seen, report }) {
-  const eligiblePeers = [];
+  const rows = [];
 
-  const entries = Array.from(seen.entries());
+  for (const p of candidates) {
+    const id = peerId(p);
+    if (id === null) continue;
 
-  await report(
-    `Testing write access for ${entries.length} unique chats...\nTest message: "${TEST_MESSAGE}"\nDelay: 2 seconds after each write test.`,
-  );
-
-  let index = 0;
-
-  for (const [tgId, { chat, peer }] of entries) {
-    index += 1;
-
-    const title = chat?.title || chat?.username || `Chat ${tgId}`;
-
-    await report(`Testing ${index}/${entries.length}: ${title}`);
-
-    if (!peer) {
-      await api("setChatStatus", {
-        job_id: jobId,
-        telegram_chat_id: tgId,
+    const chat = byId.get(id);
+    if (!chat) {
+      rows.push({
+        telegram_chat_id: id,
+        access_hash: null,
+        title: null,
+        username: null,
+        chat_type: "UNKNOWN",
         access_status: "INACCESSIBLE",
       });
-
-      await report(`❌ ${title}\nNo valid Telegram peer.`);
-
       continue;
     }
 
-    /**
-     * Existing forbidden entities should not receive a message.
-     */
-    const initial = initialStatus(chat);
+    const peer = peerOf(chat);
+    const blocked = excludedStatus(chat, peer);
+    const alreadyJoined = alreadyIds.has(id) || chat.left === false;
+    const status = blocked ?? (alreadyJoined ? "ACCESSIBLE" : "JOIN_REQUIRED");
 
-    if (initial === "NO_PERMISSION" || initial === "DEACTIVATED") {
-      await api("setChatStatus", {
-        job_id: jobId,
-        telegram_chat_id: tgId,
-        access_status: initial,
-      });
-
-      await report(`❌ ${title}\nTelegram reports ${initial}.`);
-
-      continue;
-    }
-
-    /**
-     * Actually send "hey".
-     */
-    const result = await testWriteAccess(client, peer, report);
-
-    if (!result.ok) {
-      const status = result.status === "UNKNOWN" ? "NO_PERMISSION" : result.status;
-
-      await api("setChatStatus", {
-        job_id: jobId,
-        telegram_chat_id: tgId,
-        access_status: status,
-      });
-
-      await report(`❌ ${title}\nWrite test failed: ${result.error}`);
-
-      await sleep(TEST_DELAY_MS);
-      continue;
-    }
-
-    /**
-     * Successfully sent "hey".
-     * This proves the account can send messages there.
-     */
-    await api("setChatStatus", {
-      job_id: jobId,
-      telegram_chat_id: tgId,
-      access_status: "ACCESSIBLE",
+    rows.push({
+      telegram_chat_id: id,
+      access_hash: chat.accessHash ? String(chat.accessHash) : null,
+      title: chat.title ?? null,
+      username: chat.username ?? null,
+      chat_type: typeOf(chat),
+      access_status: status,
     });
-
-    /**
-     * Delete temporary test message.
-     */
-    let deleted = false;
-
-    if (result.messageId) {
-      deleted = await deleteTestMessage(client, peer, result.messageId, report);
-    }
-
-    eligiblePeers.push({
-      tgId,
-      peer,
-      chat,
-    });
-
-    await report(
-      deleted
-        ? `✅ ${title}\nWrite access confirmed.\nTest message deleted.`
-        : `✅ ${title}\nWrite access confirmed.\nTest message could not be deleted automatically.`,
-    );
-
-    /**
-     * Required 2-second delay between chats.
-     */
-    await sleep(TEST_DELAY_MS);
   }
 
-  return eligiblePeers;
+  return rows;
 }
 
-/**
- * Runs one complete merge job.
- */
-export async function runJob({ botUserId, urls, botChatId, folderName, report }) {
-  const client = await getClient(botUserId);
+function summarizeRows({ folders, groups, totals }) {
+  return {
+    sourceFolders: folders.length,
+    sourceFoldersOk: folders.filter((f) => f.status === "OK").length,
+    sourceFoldersFailed: folders.filter((f) => f.status === "FAILED").length,
+    totalGroups: totals.total_chats,
+    duplicates: totals.duplicate_chats,
+    alreadyJoined: groups.filter((g) => g.accessStatus === "ACCESSIBLE").length,
+    availableToJoin: groups.filter((g) => g.accessStatus === "JOIN_REQUIRED").length,
+    inaccessibleExcluded: totals.inaccessible_chats,
+    finalEligibleGroups: totals.final_chats,
+  };
+}
 
+function formatGroup(row) {
+  const chat = Array.isArray(row.chats) ? row.chats[0] : row.chats;
+
+  return {
+    telegramChatId: Number(row.telegram_chat_id),
+    title: chat?.title || chat?.username || `Chat ${row.telegram_chat_id}`,
+    username: chat?.username ?? null,
+    chatType: chat?.chat_type ?? "UNKNOWN",
+    accessStatus: row.access_status,
+    alreadyJoined: row.access_status === "ACCESSIBLE",
+  };
+}
+
+async function refreshTotals(jobId) {
+  const { totals } = await api("jobTotals", { job_id: jobId });
+  return totals;
+}
+
+export async function analyzeFolders({ botUserId, urls, botChatId = null, report }) {
+  const client = await getClient(botUserId);
   const parsed = urls.map(parseFolderLink).filter(Boolean);
+
+  if (parsed.length === 0) {
+    throw new Error("Add at least one t.me/addlist/... folder link.");
+  }
 
   const { job_id: jobId, folders } = await api("createJob", {
     bot_user_id: botUserId,
@@ -418,87 +264,33 @@ export async function runJob({ botUserId, urls, botChatId, folderName, report })
     bot_chat_id: botChatId,
   });
 
-  await report(`Processing ${parsed.length} folder${parsed.length === 1 ? "" : "s"}…`);
-
-  /**
-   * telegram_chat_id -> {
-   *   chat,
-   *   peer
-   * }
-   */
-  const seen = new Map();
+  await report?.(`Analyzing ${parsed.length} folder link${parsed.length === 1 ? "" : "s"}...`);
 
   let ok = 0;
   let failed = 0;
 
-  /**
-   * STEP 1
-   * Read source folder links.
-   */
   for (let i = 0; i < parsed.length; i += 1) {
     const item = parsed[i];
-
     const folderRow = folders.find((f) => f.position === i + 1) ?? folders[i];
-
-    const label = `Folder ${i + 1}/${parsed.length}`;
 
     if (!item.slug) {
       failed += 1;
-
       await api("updateFolder", {
         folder_id: folderRow.id,
         patch: {
           status: "FAILED",
-          error: "Invalid folder link — not a t.me/addlist/... link.",
+          error: "Invalid folder link. Use a t.me/addlist/... URL.",
         },
       });
-
-      await report(`${label}\n❌ Invalid folder link.`);
-
       continue;
     }
 
     try {
       const invite = await withFloodWait(
-        () =>
-          client.invoke(
-            new Api.chatlists.CheckChatlistInvite({
-              slug: item.slug,
-            }),
-          ),
-        (seconds) =>
-          report(
-            `Telegram rate limit detected.\nProcessing will continue automatically in ${seconds}s.`,
-          ),
+        () => client.invoke(new Api.chatlists.CheckChatlistInvite({ slug: item.slug })),
+        (seconds) => report?.(`Telegram rate limit detected. Waiting ${seconds}s.`),
       );
-
-      const chats = invite.chats ?? [];
-
-      const rows = [];
-
-      for (const chat of chats) {
-        const peer = peerOf(chat);
-        const tgId = Number(chat.id);
-
-        /**
-         * Deduplicate globally across all source folders.
-         */
-        if (!seen.has(tgId)) {
-          seen.set(tgId, {
-            chat,
-            peer,
-          });
-        }
-
-        rows.push({
-          telegram_chat_id: tgId,
-          access_hash: chat.accessHash ? String(chat.accessHash) : null,
-          title: chat.title ?? null,
-          username: chat.username ?? null,
-          chat_type: typeOf(chat),
-          access_status: peer ? initialStatus(chat) : "INACCESSIBLE",
-        });
-      }
+      const rows = chatRowsFromInvite(invite);
 
       await api("recordFolderChats", {
         job_id: jobId,
@@ -511,19 +303,15 @@ export async function runJob({ botUserId, urls, botChatId, folderName, report })
         patch: {
           status: "OK",
           slug: item.slug,
-          title: invite.title ?? null,
+          title: titleText(invite.title),
           chats_found: rows.length,
         },
       });
 
       ok += 1;
-
-      await report(`${label}\nChats found: ${rows.length}`);
     } catch (e) {
       failed += 1;
-
-      const msg = e?.errorMessage || e?.message || "";
-
+      const msg = telegramError(e);
       await api("updateFolder", {
         folder_id: folderRow.id,
         patch: {
@@ -532,8 +320,6 @@ export async function runJob({ botUserId, urls, botChatId, folderName, report })
           error: folderErrorMessage(msg),
         },
       });
-
-      await report(`${label}\n❌ ${folderErrorMessage(msg)}`);
     }
 
     await api("updateJob", {
@@ -541,99 +327,68 @@ export async function runJob({ botUserId, urls, botChatId, folderName, report })
       patch: {
         folders_ok: ok,
         folders_failed: failed,
-        stage: `Processed ${i + 1}/${parsed.length}`,
+        stage: `Analyzed ${i + 1}/${parsed.length}`,
       },
     });
   }
 
-  /**
-   * No source folder worked.
-   */
-  if (ok === 0) {
-    await api("updateJob", {
-      job_id: jobId,
-      patch: {
-        status: "FAILED",
-        stage: "No folder could be read",
-        error: "All folder links failed.",
-      },
-    });
+  const totals = await refreshTotals(jobId);
+  const { folders: savedFolders, groups } = await api("jobAnalysisDetails", { job_id: jobId });
+  const cleanGroups = groups.map(formatGroup);
 
-    return {
-      jobId,
-      failedAll: true,
-    };
-  }
-
-  /**
-   * STEP 2
-   *
-   * Actually test every unique chat.
-   *
-   * This replaces the old "join everything and assume access"
-   * behaviour.
-   */
-  const eligiblePeers = await verifyChats({
-    client,
-    jobId,
-    seen,
-    report,
-  });
-
-  /**
-   * Get final database totals after real verification.
-   */
-  const { totals } = await api("jobTotals", {
+  await api("updateJob", {
     job_id: jobId,
+    patch: {
+      ...totals,
+      status: ok === 0 ? "FAILED" : "ANALYZED",
+      stage: ok === 0 ? "No readable folders" : "Analysis complete",
+      error: ok === 0 ? "No folder link could be read." : null,
+    },
   });
 
-  /**
-   * Nothing survived the write-access test.
-   */
-  if (eligiblePeers.length === 0) {
-    await api("updateJob", {
-      job_id: jobId,
-      patch: {
-        ...totals,
-        status: "FAILED",
-        stage: "No eligible chats",
-        error: 'No chats passed the "hey" write-access test.',
-      },
-    });
+  return {
+    ok: ok > 0,
+    jobId,
+    folders: savedFolders,
+    summary: summarizeRows({ folders: savedFolders, groups: cleanGroups, totals }),
+    groups: cleanGroups,
+  };
+}
 
+async function joinMissingPeer({ client, slug, peer, report, title }) {
+  try {
+    await withFloodWait(
+      () =>
+        client.invoke(
+          new Api.chatlists.JoinChatlistInvite({
+            slug,
+            peers: [peer],
+          }),
+        ),
+      (seconds) => report?.(`Telegram rate limit detected. Waiting ${seconds}s before joining.`),
+    );
+
+    await sleep(1200);
+    return { ok: true };
+  } catch (e) {
+    const msg = telegramError(e);
     return {
-      jobId,
-      totals,
-      noEligible: true,
+      ok: false,
+      status: classifyError(msg),
+      error: `${title}: ${msg}`,
     };
   }
+}
 
-  /**
-   * STEP 3
-   *
-   * Create ONE master folder containing only chats
-   * that passed the write test.
-   */
-  const name = folderName || `Clean Master Folder - ${new Date().toISOString().slice(0, 10)}`;
-
-  await report(`Creating master folder "${name}" with ${eligiblePeers.length} verified chats…`);
-
-  /**
-   * Get current Telegram dialog filters.
-   */
+async function createTelegramFolder({ client, folderName, peers, report }) {
   const existing = await client.invoke(new Api.messages.GetDialogFilters());
-
   const filters = existing.filters ?? existing;
-
   const usedIds = new Set(
     (Array.isArray(filters) ? filters : []).map((f) => f.id).filter((n) => typeof n === "number"),
   );
 
   let filterId = 2;
-
-  while (usedIds.has(filterId)) {
-    filterId += 1;
-  }
+  while (usedIds.has(filterId)) filterId += 1;
 
   if (filterId > 255) {
     throw new Error(
@@ -641,103 +396,174 @@ export async function runJob({ botUserId, urls, botChatId, folderName, report })
     );
   }
 
-  const includePeers = eligiblePeers.map((c) => c.peer);
-
   let title;
-
   try {
     title = new Api.TextWithEntities({
-      text: name,
+      text: folderName,
       entities: [],
     });
   } catch {
-    title = name;
+    title = folderName;
   }
 
-  /**
-   * Create the Telegram folder.
-   */
   await withFloodWait(
     () =>
       client.invoke(
         new Api.messages.UpdateDialogFilter({
           id: filterId,
-
           filter: new Api.DialogFilter({
             id: filterId,
             title,
             pinnedPeers: [],
-            includePeers,
+            includePeers: peers,
             excludePeers: [],
           }),
         }),
       ),
-    (seconds) => report(`Telegram rate limit detected.\nRetrying automatically in ${seconds}s.`),
+    (seconds) => report?.(`Telegram rate limit detected. Waiting ${seconds}s before creating.`),
   );
 
-  /**
-   * STEP 4
-   *
-   * Try to generate Telegram's shareable folder link.
-   *
-   * NOTE:
-   * Telegram itself may refuse this with CHATLISTS_TOO_MUCH,
-   * which is an account-side Telegram limitation.
-   */
-  let shareLink = null;
-  let shareNote = null;
+  return filterId;
+}
 
-  const shareablePeers = eligiblePeers
-    .filter((c) => c.peer instanceof Api.InputPeerChannel)
-    .map((c) => c.peer);
+async function exportShareLink({ client, filterId, folderName, peers, report }) {
+  const res = await withFloodWait(
+    () =>
+      client.invoke(
+        new Api.chatlists.ExportChatlistInvite({
+          chatlist: new Api.InputChatlistDialogFilter({ filterId }),
+          title: folderName,
+          peers,
+        }),
+      ),
+    (seconds) => report?.(`Telegram rate limit detected. Waiting ${seconds}s before exporting.`),
+  );
 
-  try {
-    if (shareablePeers.length === 0) {
-      throw new Error("NO_SHAREABLE_PEERS");
+  return res?.invite?.url ?? null;
+}
+
+export async function joinAndCreateFolder({ botUserId, jobId, folderName, report }) {
+  const client = await getClient(botUserId);
+  const details = await api("jobAnalysisDetails", { job_id: jobId, bot_user_id: botUserId });
+  const rows = details.groups ?? [];
+  const foldersById = new Map((details.folders ?? []).map((f) => [f.id, f]));
+  const name =
+    String(folderName || "")
+      .trim()
+      .slice(0, 60) || `Clean Folder ${new Date().toISOString().slice(0, 10)}`;
+
+  if (rows.length === 0) {
+    throw new Error("There are no eligible groups from the analysis to join.");
+  }
+
+  await api("updateJob", {
+    job_id: jobId,
+    patch: { status: "RUNNING", stage: "Joining eligible groups", folder_name: name },
+  });
+
+  const final = [];
+  const excluded = [];
+  let joined = 0;
+
+  for (const row of rows) {
+    const group = formatGroup(row);
+    const peer = peerFromRow(row);
+    const folder = foldersById.get(row.folder_id);
+
+    if (!peer) {
+      excluded.push({ ...group, reason: "No usable Telegram peer was returned." });
+      await api("setChatStatus", {
+        job_id: jobId,
+        telegram_chat_id: group.telegramChatId,
+        access_status: "INACCESSIBLE",
+      });
+      continue;
     }
 
-    const res = await withFloodWait(
-      () =>
-        client.invoke(
-          new Api.chatlists.ExportChatlistInvite({
-            chatlist: new Api.InputChatlistDialogFilter({
-              filterId,
-            }),
-
-            title: name,
-
-            peers: shareablePeers,
-          }),
-        ),
-      (seconds) => report(`Telegram rate limit detected.\nRetrying automatically in ${seconds}s.`),
-    );
-
-    shareLink = res?.invite?.url ?? null;
-
-    if (!shareLink) {
-      shareNote = "Telegram did not return a shareable link for this folder.";
+    if (row.access_status === "ACCESSIBLE") {
+      final.push({ ...group, peer });
+      continue;
     }
-  } catch (e) {
-    const msg = e?.errorMessage || e?.message || "";
 
-    const upper = String(msg).toUpperCase();
+    if (!folder?.slug) {
+      excluded.push({ ...group, reason: "Missing source folder slug." });
+      await api("setChatStatus", {
+        job_id: jobId,
+        telegram_chat_id: group.telegramChatId,
+        access_status: "INACCESSIBLE",
+      });
+      continue;
+    }
 
-    if (upper.includes("PREMIUM")) {
-      shareNote =
-        "Telegram only issues shareable folder links to eligible Telegram Premium accounts.";
-    } else if (msg === "NO_SHAREABLE_PEERS") {
-      shareNote = "None of the verified chats can be used for a Telegram shareable folder link.";
-    } else if (upper.includes("CHATLISTS_TOO_MUCH")) {
-      shareNote =
-        "Telegram refused to create the shareable folder link because the account has reached Telegram's chat-list/folder sharing limit.";
+    const result = await joinMissingPeer({
+      client,
+      slug: folder.slug,
+      peer,
+      title: group.title,
+      report,
+    });
+
+    if (result.ok) {
+      joined += 1;
+      final.push({ ...group, peer, accessStatus: "ACCESSIBLE", alreadyJoined: false });
+      await api("setChatStatus", {
+        job_id: jobId,
+        telegram_chat_id: group.telegramChatId,
+        access_status: "ACCESSIBLE",
+      });
     } else {
-      shareNote = `Telegram refused to create a shareable link: ${msg}`;
+      excluded.push({ ...group, reason: result.error });
+      await api("setChatStatus", {
+        job_id: jobId,
+        telegram_chat_id: group.telegramChatId,
+        access_status: result.status,
+      });
     }
   }
 
-  /**
-   * Save final job state.
-   */
+  if (final.length === 0) {
+    const totals = await refreshTotals(jobId);
+    await api("updateJob", {
+      job_id: jobId,
+      patch: {
+        ...totals,
+        status: "FAILED",
+        stage: "No groups joined",
+        error: "No eligible group could be joined or accessed.",
+      },
+    });
+    return { ok: false, jobId, noEligible: true, excluded };
+  }
+
+  const includePeers = final.map((g) => g.peer);
+  const filterId = await createTelegramFolder({
+    client,
+    folderName: name,
+    peers: includePeers,
+    report,
+  });
+
+  let shareLink = null;
+  let shareError = null;
+
+  try {
+    shareLink = await exportShareLink({
+      client,
+      filterId,
+      folderName: name,
+      peers: includePeers,
+      report,
+    });
+
+    if (!shareLink) {
+      shareError = "Telegram created the folder but did not return a shareable link.";
+    }
+  } catch (e) {
+    shareError = telegramError(e) || "Telegram refused shareable link generation.";
+  }
+
+  const totals = await refreshTotals(jobId);
+
   await api("updateJob", {
     job_id: jobId,
     patch: {
@@ -746,19 +572,26 @@ export async function runJob({ botUserId, urls, botChatId, folderName, report })
       stage: "Completed",
       folder_name: name,
       share_link: shareLink,
-      share_link_note: shareNote,
+      share_link_note: shareError,
     },
   });
 
   return {
+    ok: true,
     jobId,
-    totals,
-    name,
+    folderName: name,
+    filterId,
+    groupsJoined: joined,
+    groupsInFolder: final.length,
+    groupsExcluded: excluded.length,
+    excluded,
     shareLink,
-    shareNote,
-    folderCount: parsed.length,
-    ok,
-    failed,
-    joined: 0,
+    shareError,
   };
+}
+
+export async function runJob({ botUserId, urls, botChatId, folderName, report }) {
+  const analysis = await analyzeFolders({ botUserId, urls, botChatId, report });
+  if (!analysis.ok || analysis.groups.length === 0) return analysis;
+  return joinAndCreateFolder({ botUserId, jobId: analysis.jobId, folderName, report });
 }

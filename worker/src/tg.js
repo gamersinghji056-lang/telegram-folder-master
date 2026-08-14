@@ -189,7 +189,7 @@ export async function getClient(botUserId) {
   const stored = await loadUserSession(Number(key));
 
   if (!stored?.session_enc) {
-    throw new Error("Your Telegram account is not connected yet. Use /connect first.");
+    throw new Error("Your Telegram account is not connected yet. Open the Mini App first.");
   }
 
   let session;
@@ -198,12 +198,12 @@ export async function getClient(botUserId) {
     session = decrypt(stored.session_enc);
   } catch {
     throw new Error(
-      "Your saved Telegram session could not be decrypted. Please reconnect with /connect.",
+      "Your saved Telegram session could not be decrypted. Please reconnect in the Mini App.",
     );
   }
 
   if (!session) {
-    throw new Error("Your Telegram session is empty. Please reconnect with /connect.");
+    throw new Error("Your Telegram session is empty. Please reconnect in the Mini App.");
   }
 
   const client = new TelegramClient(new StringSession(session), state.apiId, state.apiHash, opts());
@@ -217,7 +217,7 @@ export async function getClient(botUserId) {
   if (!authorized) {
     clients.delete(key);
 
-    throw new Error("Your Telegram session has expired. Please use /connect again.");
+    throw new Error("Your Telegram session has expired. Please reconnect in the Mini App.");
   }
 
   clients.set(key, client);
@@ -390,12 +390,12 @@ export async function signInWithCode(botUserId, code) {
   const login = logins.get(key);
 
   if (!login) {
-    throw new Error("No active Telegram login request. Please use /connect again.");
+    throw new Error("No active Telegram login request. Please start again in the Mini App.");
   }
 
   if (isLoginExpired(login)) {
     await clearLogin(key);
-    throw new Error("This Telegram login attempt expired. Please use /connect again.");
+    throw new Error("This Telegram login attempt expired. Please start again in the Mini App.");
   }
 
   const cleanCode = String(code ?? "").trim();
@@ -446,12 +446,12 @@ export async function signInWithPassword(botUserId, password) {
   const login = logins.get(key);
 
   if (!login) {
-    throw new Error("No active Telegram login request. Please use /connect again.");
+    throw new Error("No active Telegram login request. Please start again in the Mini App.");
   }
 
   if (isLoginExpired(login)) {
     await clearLogin(key);
-    throw new Error("This Telegram login attempt expired. Please use /connect again.");
+    throw new Error("This Telegram login attempt expired. Please start again in the Mini App.");
   }
 
   const cleanPassword = String(password ?? "");
@@ -674,7 +674,7 @@ function friendlyAuthError(msg) {
   }
 
   if (text.includes("PHONE_CODE_EXPIRED")) {
-    return "That Telegram login code expired. Please use /connect and request a new code.";
+    return "That Telegram login code expired. Please request a new code in the Mini App.";
   }
 
   if (text.includes("PHONE_NUMBER_INVALID")) {
@@ -708,7 +708,7 @@ function friendlyAuthError(msg) {
   }
 
   if (text.includes("AUTH_KEY_UNREGISTERED")) {
-    return "Telegram authorization expired. Please use /connect again.";
+    return "Telegram authorization expired. Please reconnect in the Mini App.";
   }
 
   if (text.includes("USER_DEACTIVATED")) {

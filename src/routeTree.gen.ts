@@ -11,6 +11,8 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthRouteImport } from './routes/auth'
+import { Route as MiniRouteImport } from './routes/mini'
+import { Route as ApiPublicMiniRouteImport } from './routes/api/public/mini'
 import { Route as ApiPublicWorkerRouteImport } from './routes/api/public/worker'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +25,16 @@ const AuthRoute = AuthRouteImport.update({
   path: '/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MiniRoute = MiniRouteImport.update({
+  id: '/mini',
+  path: '/mini',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicMiniRoute = ApiPublicMiniRouteImport.update({
+  id: '/api/public/mini',
+  path: '/api/public/mini',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicWorkerRoute = ApiPublicWorkerRouteImport.update({
   id: '/api/public/worker',
   path: '/api/public/worker',
@@ -32,30 +44,44 @@ const ApiPublicWorkerRoute = ApiPublicWorkerRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/mini': typeof MiniRoute
+  '/api/public/mini': typeof ApiPublicMiniRoute
   '/api/public/worker': typeof ApiPublicWorkerRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/mini': typeof MiniRoute
+  '/api/public/mini': typeof ApiPublicMiniRoute
   '/api/public/worker': typeof ApiPublicWorkerRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/mini': typeof MiniRoute
+  '/api/public/mini': typeof ApiPublicMiniRoute
   '/api/public/worker': typeof ApiPublicWorkerRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/api/public/worker'
+  fullPaths: '/' | '/auth' | '/mini' | '/api/public/mini' | '/api/public/worker'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/api/public/worker'
-  id: '__root__' | '/' | '/auth' | '/api/public/worker'
+  to: '/' | '/auth' | '/mini' | '/api/public/mini' | '/api/public/worker'
+  id:
+    | '__root__'
+    | '/'
+    | '/auth'
+    | '/mini'
+    | '/api/public/mini'
+    | '/api/public/worker'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
+  MiniRoute: typeof MiniRoute
+  ApiPublicMiniRoute: typeof ApiPublicMiniRoute
   ApiPublicWorkerRoute: typeof ApiPublicWorkerRoute
 }
 
@@ -75,6 +101,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mini': {
+      id: '/mini'
+      path: '/mini'
+      fullPath: '/mini'
+      preLoaderRoute: typeof MiniRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/mini': {
+      id: '/api/public/mini'
+      path: '/api/public/mini'
+      fullPath: '/api/public/mini'
+      preLoaderRoute: typeof ApiPublicMiniRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/worker': {
       id: '/api/public/worker'
       path: '/api/public/worker'
@@ -88,6 +128,8 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
+  MiniRoute: MiniRoute,
+  ApiPublicMiniRoute: ApiPublicMiniRoute,
   ApiPublicWorkerRoute: ApiPublicWorkerRoute,
 }
 export const routeTree = rootRouteImport
