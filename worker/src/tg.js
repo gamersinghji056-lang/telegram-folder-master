@@ -129,6 +129,33 @@ function userKey(botUserId) {
   return String(id);
 }
 
+function safeLog(event, data = {}) {
+  const clean = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === "bigint") clean[key] = value.toString();
+    else clean[key] = value;
+  }
+
+  console.log(`[tg-session] ${event}: ${JSON.stringify(clean)}`);
+}
+
+function accountPayload(me) {
+  const telegramUserId = Number(me.id);
+
+  return {
+    telegram_user_id: telegramUserId,
+    telegramUserId,
+    username: me.username || null,
+    first_name: me.firstName || null,
+    firstName: me.firstName || null,
+    last_name: me.lastName || null,
+    lastName: me.lastName || null,
+    is_premium: Boolean(me.premium),
+    isPremium: Boolean(me.premium),
+  };
+}
+
 /**
  * Load a user's encrypted MTProto session from the App API.
  */
@@ -182,21 +209,65 @@ export async function getClient(botUserId) {
 
   const existing = clients.get(key);
 
-  if (existing && existing.connected) {
-    return existing;
+  if (existing) {
+    try {
+      if (!existing.connected) {
+        await existing.connect();
+      }
+
+      const authorized = await existing.isUserAuthorized();
+      safeLog("existing_client_authorized", {
+        botUserId: Number(key),
+        authorized,
+      });
+
+      if (authorized) {
+        return existing;
+      }
+    } catch (e) {
+      safeLog("existing_client_check_failed", {
+        botUserId: Number(key),
+        error: telegramErrorMessage(e),
+      });
+    }
+
+    clients.delete(key);
   }
 
   const stored = await loadUserSession(Number(key));
 
+  safeLog("session_row_found", {
+    botUserId: Number(key),
+    found: Boolean(stored?.session_enc),
+    storedBotUserId: stored?.bot_user_id == null ? null : Number(stored.bot_user_id),
+    botUserIdMatch: stored?.bot_user_id == null ? null : Number(stored.bot_user_id) === Number(key),
+  });
+
   if (!stored?.session_enc) {
     throw new Error("Your Telegram account is not connected yet. Open the Mini App first.");
+  }
+
+  if (Number(stored.bot_user_id) !== Number(key)) {
+    safeLog("session_user_mismatch", {
+      botUserId: Number(key),
+      storedBotUserId: Number(stored.bot_user_id),
+    });
+    throw new Error("Saved Telegram session belongs to a different Telegram Mini App user.");
   }
 
   let session;
 
   try {
     session = decrypt(stored.session_enc);
+    safeLog("session_decrypt", {
+      botUserId: Number(key),
+      success: Boolean(session),
+    });
   } catch {
+    safeLog("session_decrypt", {
+      botUserId: Number(key),
+      success: false,
+    });
     throw new Error(
       "Your saved Telegram session could not be decrypted. Please reconnect in the Mini App.",
     );
@@ -213,6 +284,11 @@ export async function getClient(botUserId) {
   await client.connect();
 
   const authorized = await client.isUserAuthorized();
+
+  safeLog("stored_session_authorized", {
+    botUserId: Number(key),
+    authorized,
+  });
 
   if (!authorized) {
     clients.delete(key);
@@ -240,8 +316,14 @@ export async function getMe(botUserId) {
 export async function isUserConnected(botUserId) {
   try {
     const client = await getClient(botUserId);
+    const authorized = await client.isUserAuthorized();
 
-    return Boolean(client && client.connected && (await client.isUserAuthorized()));
+    safeLog("is_user_connected", {
+      botUserId: Number(userKey(botUserId)),
+      authorized,
+    });
+
+    return Boolean(authorized);
   } catch {
     return false;
   }
@@ -316,6 +398,37 @@ export async function sendCode(botUserId, phone, botChatId = null) {
 
   if (!cleanPhone) {
     throw new Error("Please send your phone number with country code. Example: +919876543210");
+  }
+
+  try {
+    const existingClient = await getClient(botUserId);
+    const authorized = await existingClient.isUserAuthorized();
+
+    if (authorized) {
+      const me = await existingClient.getMe();
+      const account = accountPayload(me);
+
+      safeLog("send_code_skipped_existing_session", {
+        botUserId: Number(key),
+        authorized: true,
+        telegramUserId: account.telegram_user_id,
+      });
+
+      return {
+        ok: true,
+        connected: true,
+        alreadyConnected: true,
+        ...account,
+        account,
+        message: "Telegram account is already connected.",
+      };
+    }
+  } catch (e) {
+    safeLog("send_code_existing_session_check", {
+      botUserId: Number(key),
+      connected: false,
+      reason: telegramErrorMessage(e),
+    });
   }
 
   const oldLogin = logins.get(key);
@@ -497,29 +610,111 @@ async function finishLogin(botUserId) {
 
   const { client, phone, botChatId } = login;
 
-  if (!(await client.isUserAuthorized())) {
+  const authorized = await client.isUserAuthorized();
+
+  safeLog("finish_login_authorized", {
+    botUserId: Number(key),
+    authorized,
+  });
+
+  if (!authorized) {
     throw new Error("Telegram authorization was not completed.");
   }
 
   const session = client.session.save();
 
+  if (!session) {
+    throw new Error("Telegram returned an empty session. Please reconnect in the Mini App.");
+  }
+
   const me = await client.getMe();
+  const account = accountPayload(me);
 
   /**
    * Store the encrypted session.
    *
    * The raw StringSession never leaves this worker.
    */
-  await saveUserSession(botUserId, {
-    bot_chat_id: botChatId,
-    phone,
-    session_enc: encrypt(session),
-    telegram_account_id: Number(me.id),
-    telegram_username: me.username || null,
-    first_name: me.firstName || null,
-    last_name: me.lastName || null,
-    is_premium: Boolean(me.premium),
+  try {
+    await saveUserSession(botUserId, {
+      bot_chat_id: botChatId,
+      phone,
+      session_enc: encrypt(session),
+      telegram_account_id: account.telegram_user_id,
+      telegram_username: account.username,
+      first_name: account.firstName,
+      last_name: account.lastName,
+      is_premium: account.isPremium,
+    });
+
+    safeLog("session_save_success", {
+      botUserId: Number(key),
+      telegramUserId: account.telegram_user_id,
+    });
+  } catch (e) {
+    safeLog("session_save_failure", {
+      botUserId: Number(key),
+      error: telegramErrorMessage(e),
+    });
+    throw new Error(`Could not save Telegram session: ${telegramErrorMessage(e)}`);
+  }
+
+  const stored = await loadUserSession(botUserId);
+
+  safeLog("session_readback_row_found", {
+    botUserId: Number(key),
+    found: Boolean(stored?.session_enc),
+    storedBotUserId: stored?.bot_user_id == null ? null : Number(stored.bot_user_id),
+    botUserIdMatch: stored?.bot_user_id == null ? null : Number(stored.bot_user_id) === Number(key),
   });
+
+  if (!stored?.session_enc) {
+    throw new Error("Telegram session save could not be verified.");
+  }
+
+  if (Number(stored.bot_user_id) !== Number(key)) {
+    throw new Error("Saved Telegram session was written for a different Telegram Mini App user.");
+  }
+
+  let savedSession;
+
+  try {
+    savedSession = decrypt(stored.session_enc);
+    safeLog("session_readback_decrypt", {
+      botUserId: Number(key),
+      success: Boolean(savedSession),
+    });
+  } catch (e) {
+    safeLog("session_readback_decrypt", {
+      botUserId: Number(key),
+      success: false,
+      error: telegramErrorMessage(e),
+    });
+    throw new Error("Saved Telegram session could not be decrypted after write.");
+  }
+
+  const verifyClient = new TelegramClient(
+    new StringSession(savedSession),
+    state.apiId,
+    state.apiHash,
+    opts(),
+  );
+  verifyClient.setLogLevel?.("error");
+
+  try {
+    await verifyClient.connect();
+    const savedAuthorized = await verifyClient.isUserAuthorized();
+    safeLog("session_readback_authorized", {
+      botUserId: Number(key),
+      authorized: savedAuthorized,
+    });
+
+    if (!savedAuthorized) {
+      throw new Error("Saved Telegram session could not be authorized on readback.");
+    }
+  } finally {
+    await verifyClient.disconnect().catch(() => {});
+  }
 
   clients.set(key, client);
 
@@ -528,17 +723,8 @@ async function finishLogin(botUserId) {
   return {
     ok: true,
     connected: true,
-    telegramUserId: Number(me.id),
-    username: me.username || null,
-    firstName: me.firstName || null,
-    lastName: me.lastName || null,
-    account: {
-      telegramUserId: Number(me.id),
-      username: me.username || null,
-      firstName: me.firstName || null,
-      lastName: me.lastName || null,
-      isPremium: Boolean(me.premium),
-    },
+    ...account,
+    account,
     message: `Connected as ${
       me.username ? "@" + me.username : me.firstName || "your Telegram account"
     }.`,

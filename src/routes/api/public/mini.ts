@@ -29,13 +29,14 @@ async function callWorker(
   action: string,
   payload: Record<string, unknown>,
 ) {
+  const workerAction = `mini${action.charAt(0).toUpperCase()}${action.slice(1)}`;
   const res = await fetch(`${workerUrl.replace(/\/+$/, "")}/rpc`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${workerToken}`,
     },
-    body: JSON.stringify({ action: `mini${action[0].toUpperCase()}${action.slice(1)}`, payload }),
+    body: JSON.stringify({ action: workerAction, payload }),
     signal: AbortSignal.timeout(120_000),
   });
 
@@ -49,7 +50,7 @@ async function callWorker(
   }
 
   if (!res.ok)
-    return json({ error: data.error ?? `Worker error (HTTP ${res.status}).` }, res.status);
+    return json({ error: data["error"] ?? `Worker error (HTTP ${res.status}).` }, res.status);
 
   return json(data);
 }

@@ -152,10 +152,14 @@ async function miniStatus(payload) {
   if (connected) {
     const me = await getMe(mini.botUserId);
     account = {
+      telegram_user_id: Number(me.id),
       telegramUserId: Number(me.id),
       username: me.username || null,
+      first_name: me.firstName || null,
       firstName: me.firstName || null,
+      last_name: me.lastName || null,
       lastName: me.lastName || null,
+      is_premium: Boolean(me.premium),
       isPremium: Boolean(me.premium),
     };
   }
@@ -342,7 +346,21 @@ function miniAppHtml() {
         event.preventDefault();
         showError("");
         phone = event.target.phone.value.trim();
-        try { await mini("sendCode", { phone }); renderCode(); }
+        try {
+          const result = await mini("sendCode", { phone });
+          if (result.connected) {
+            phone = "";
+            code = "";
+            account = result.account || {
+              username: result.username || null,
+              firstName: result.firstName || null
+            };
+            showError("");
+            renderDashboard();
+          } else {
+            renderCode();
+          }
+        }
         catch (e) { showError(e.message); }
       };
     }

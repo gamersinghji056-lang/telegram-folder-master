@@ -175,7 +175,7 @@ export const Route = createFileRoute("/api/public/worker")({
               { onConflict: "user_id,bot_user_id" },
             );
             if (error) return json({ error: error.message }, 500);
-            return json({ ok: true });
+            return json({ ok: true, bot_user_id: data.bot_user_id });
           }
 
           case "deleteUserSession": {

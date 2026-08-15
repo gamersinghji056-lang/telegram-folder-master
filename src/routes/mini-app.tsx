@@ -22,6 +22,27 @@ type MiniStatus = {
   account?: { username: string | null; firstName: string | null };
 };
 
+type LoginResult = {
+  ok: boolean;
+  connected?: boolean;
+  needsPassword?: boolean;
+  account?: { username: string | null; firstName: string | null };
+};
+
+function connectedStatus(current: MiniStatus | null, result: LoginResult): MiniStatus {
+  const next: MiniStatus = {
+    ok: true,
+    connected: true,
+  };
+
+  if (current?.botUser) next.botUser = current.botUser;
+
+  const account = result.account ?? current?.account;
+  if (account) next.account = account;
+
+  return next;
+}
+
 type Group = {
   telegramChatId: number;
   title: string;
@@ -241,8 +262,17 @@ export function MiniApp() {
     setBusy(true);
     setError(null);
     try {
-      await mini("sendCode", { phone });
-      setStage("code");
+      const data = await mini<LoginResult>("sendCode", { phone });
+      if (data.connected) {
+        setStatus((current) => connectedStatus(current, data));
+        setPhone("");
+        setCode("");
+        setPassword("");
+        setStage("app");
+        setView("dashboard");
+      } else {
+        setStage("code");
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -255,9 +285,16 @@ export function MiniApp() {
     setBusy(true);
     setError(null);
     try {
-      const data = await mini<{ needsPassword?: boolean }>("signIn", { code });
+      const data = await mini<LoginResult>("signIn", { code });
       if (data.needsPassword) {
         setStage("password");
+      } else if (data.connected) {
+        setStatus((current) => connectedStatus(current, data));
+        setPhone("");
+        setCode("");
+        setPassword("");
+        setStage("app");
+        setView("dashboard");
       } else {
         await refresh();
       }
@@ -273,9 +310,18 @@ export function MiniApp() {
     setBusy(true);
     setError(null);
     try {
-      await mini("checkPassword", { password });
-      setPassword("");
-      await refresh();
+      const data = await mini<LoginResult>("checkPassword", { password });
+      if (data.connected) {
+        setStatus((current) => connectedStatus(current, data));
+        setPhone("");
+        setCode("");
+        setPassword("");
+        setStage("app");
+        setView("dashboard");
+      } else {
+        setPassword("");
+        await refresh();
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
