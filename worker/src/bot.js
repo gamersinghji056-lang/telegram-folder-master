@@ -8,7 +8,7 @@ export let botUsername = null;
 export let botError = null;
 
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
-const MINI_APP_URL = (process.env.MINI_APP_URL || (APP_URL ? `${APP_URL}/mini` : "")).replace(
+const MINI_APP_URL = (process.env.MINI_APP_URL || (APP_URL ? `${APP_URL}/mini-app` : "")).replace(
   /\/+$/,
   "",
 );

@@ -234,6 +234,12 @@ const handlers = {
       folderName: p.folderName,
     });
   },
+  miniHistory: async (p) => {
+    const mini = requireMiniUser(p.initData);
+    return api("userFolderHistory", {
+      bot_user_id: mini.botUserId,
+    });
+  },
 };
 
 function json(res, code, body) {

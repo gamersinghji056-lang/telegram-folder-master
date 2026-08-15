@@ -10,6 +10,7 @@ const bodySchema = z.object({
     "cancelLogin",
     "analyzeFolders",
     "joinAndCreate",
+    "history",
     "logout",
   ]),
   payload: z.record(z.string(), z.unknown()).default({}),

@@ -423,6 +423,23 @@ export const Route = createFileRoute("/api/public/worker")({
             });
           }
 
+          case "userFolderHistory": {
+            const botUserId = botUserIdSchema.parse(p["bot_user_id"]);
+            const { data, error } = await db
+              .from("jobs")
+              .select(
+                "id, folder_name, share_link, share_link_note, final_chats, status, created_at, updated_at",
+              )
+              .eq("user_id", userId)
+              .eq("bot_user_id", botUserId)
+              .in("status", ["DONE", "FAILED"])
+              .not("folder_name", "is", null)
+              .order("updated_at", { ascending: false })
+              .limit(25);
+            if (error) return json({ error: error.message }, 500);
+            return json({ ok: true, folders: data ?? [] });
+          }
+
           /** Final unique + eligible chats for this job. */
           case "finalChats": {
             const jobId = z.string().uuid().parse(p["job_id"]);
