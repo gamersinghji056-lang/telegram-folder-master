@@ -4,6 +4,7 @@ import { state, loadConfig, getMe, cancelLogin } from "./tg.js";
 let call = null;
 let offset = 0;
 let stopped = false;
+let polling = false;
 export let botUsername = null;
 export let botError = null;
 
@@ -135,6 +136,10 @@ async function handleUpdate(update) {
 }
 
 export async function startBot() {
+  if (call && polling && !stopped) {
+    return;
+  }
+
   stopped = false;
   if (!state.botToken) {
     botError = "Bot token not configured.";
@@ -164,23 +169,31 @@ export function stopBot() {
 }
 
 async function pollLoop() {
-  while (!stopped && call) {
-    try {
-      const updates = await call(
-        "getUpdates",
-        { offset, timeout: 30, allowed_updates: ["message"] },
-        40000,
-      );
-      for (const u of updates) {
-        offset = u.update_id + 1;
-        handleUpdate(u).catch((e) => console.error("update error:", e.message));
-      }
-    } catch (e) {
-      if (!stopped) {
-        console.error("polling error:", e.message);
-        await new Promise((r) => setTimeout(r, 5000));
+  if (polling) return;
+  polling = true;
+
+  try {
+    while (!stopped && call) {
+      try {
+        const currentCall = call;
+        const updates = await currentCall(
+          "getUpdates",
+          { offset, timeout: 30, allowed_updates: ["message"] },
+          40000,
+        );
+        for (const u of updates) {
+          offset = u.update_id + 1;
+          handleUpdate(u).catch((e) => console.error("update error:", e.message));
+        }
+      } catch (e) {
+        if (!stopped) {
+          console.error("polling error:", e.message);
+          await new Promise((r) => setTimeout(r, 5000));
+        }
       }
     }
+  } finally {
+    polling = false;
   }
 }
 

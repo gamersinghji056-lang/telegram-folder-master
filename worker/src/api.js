@@ -2,6 +2,8 @@
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
 const WORKER_TOKEN = process.env.WORKER_TOKEN || "";
 
+const SESSION_ACTIONS = new Set(["pullUserSession", "saveUserSession", "deleteUserSession"]);
+
 export async function api(action, payload = {}) {
   if (!APP_URL) throw new Error("APP_URL is not set.");
   if (!WORKER_TOKEN) throw new Error("WORKER_TOKEN is not set.");
@@ -20,7 +22,17 @@ export async function api(action, payload = {}) {
   } catch {
     throw new Error(`App API returned non-JSON (HTTP ${res.status}) for "${action}".`);
   }
-  if (!res.ok) throw new Error(data.error || `App API error (HTTP ${res.status}) for "${action}".`);
+  if (!res.ok) {
+    const error = data.error || `App API error (HTTP ${res.status}) for "${action}".`;
+
+    if (error === "unknown_action" && SESSION_ACTIONS.has(action)) {
+      console.error(
+        `App API does not recognize required per-user session action "${action}" at ${APP_URL}/api/public/worker.`,
+      );
+    }
+
+    throw new Error(error);
+  }
   return data;
 }
 

@@ -71,6 +71,12 @@ export const Route = createFileRoute("/api/public/worker")({
         const parsed = bodySchema.safeParse(await request.json().catch(() => null));
         if (!parsed.success) return json({ error: "bad_request" }, 400);
         const { action } = parsed.data;
+        const sessionActionAliases: Record<string, string> = {
+          pull_user_session: "pullUserSession",
+          save_user_session: "saveUserSession",
+          delete_user_session: "deleteUserSession",
+        };
+        const effectiveAction = sessionActionAliases[action] ?? action;
         const payload = parsed.data.payload as Record<string, never>;
 
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -95,7 +101,7 @@ export const Route = createFileRoute("/api/public/worker")({
           from: (table: string) => any;
         };
 
-        switch (action) {
+        switch (effectiveAction) {
           case "heartbeat":
             return json({ ok: true, user_id: userId });
 
