@@ -301,6 +301,7 @@ function miniAppHtml() {
     const errorBox = document.getElementById("error");
     const subtitle = document.getElementById("subtitle");
     let phone = "";
+    let code = "";
     let account = null;
 
     function esc(value) {
@@ -367,7 +368,18 @@ function miniAppHtml() {
         try {
           const result = await mini("signIn", { code: event.target.code.value.trim() });
           if (result.needsPassword) renderPassword();
-          else await loadStatus();
+          else if (result.connected) {
+            phone = "";
+            code = "";
+            account = result.account || {
+              username: result.username || null,
+              firstName: result.firstName || null
+            };
+            showError("");
+            renderDashboard();
+          } else {
+            await loadStatus();
+          }
         } catch (e) { showError(e.message); }
       };
     }
@@ -383,7 +395,21 @@ function miniAppHtml() {
       document.getElementById("passwordForm").onsubmit = async (event) => {
         event.preventDefault();
         showError("");
-        try { await mini("checkPassword", { password: event.target.password.value }); await loadStatus(); }
+        try {
+          const result = await mini("checkPassword", { password: event.target.password.value });
+          if (result.connected) {
+            phone = "";
+            code = "";
+            account = result.account || {
+              username: result.username || null,
+              firstName: result.firstName || null
+            };
+            showError("");
+            renderDashboard();
+          } else {
+            await loadStatus();
+          }
+        }
         catch (e) { showError(e.message); }
       };
     }

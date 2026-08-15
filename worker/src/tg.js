@@ -531,6 +531,14 @@ async function finishLogin(botUserId) {
     telegramUserId: Number(me.id),
     username: me.username || null,
     firstName: me.firstName || null,
+    lastName: me.lastName || null,
+    account: {
+      telegramUserId: Number(me.id),
+      username: me.username || null,
+      firstName: me.firstName || null,
+      lastName: me.lastName || null,
+      isPremium: Boolean(me.premium),
+    },
     message: `Connected as ${
       me.username ? "@" + me.username : me.firstName || "your Telegram account"
     }.`,
