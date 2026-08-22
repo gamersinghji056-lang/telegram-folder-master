@@ -1,7 +1,8 @@
 export class BaseAiProvider {
-  constructor({ id, name } = {}) {
+  constructor({ id, name, roles = [] } = {}) {
     this.id = id || "base";
     this.name = name || "Base AI Provider";
+    this.roles = roles;
   }
 
   async complete() {

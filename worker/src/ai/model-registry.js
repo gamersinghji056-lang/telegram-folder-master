@@ -1,21 +1,37 @@
-const providers = new Map();
+export function createModelRegistry() {
+  const providers = new Map();
 
-export function registerModelProvider(provider) {
-  if (!provider?.id || typeof provider.complete !== "function") {
-    throw new Error("AI model provider must include an id and complete() method.");
-  }
+  return {
+    registerModelProvider(provider) {
+      if (!provider?.id || typeof provider.complete !== "function") {
+        throw new Error("AI model provider must include an id and complete() method.");
+      }
 
-  providers.set(provider.id, provider);
-  return provider;
+      providers.set(provider.id, provider);
+      return provider;
+    },
+
+    getModelProvider(providerId) {
+      return providers.get(providerId) ?? null;
+    },
+
+    listModelProviders() {
+      return Array.from(providers.values()).map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        roles: provider.roles || [],
+      }));
+    },
+
+    clearModelProviders() {
+      providers.clear();
+    },
+  };
 }
 
-export function getModelProvider(providerId) {
-  return providers.get(providerId) ?? null;
-}
+export const modelRegistry = createModelRegistry();
 
-export function listModelProviders() {
-  return Array.from(providers.values()).map((provider) => ({
-    id: provider.id,
-    name: provider.name,
-  }));
-}
+export const registerModelProvider = modelRegistry.registerModelProvider;
+export const getModelProvider = modelRegistry.getModelProvider;
+export const listModelProviders = modelRegistry.listModelProviders;
+export const clearModelProviders = modelRegistry.clearModelProviders;
