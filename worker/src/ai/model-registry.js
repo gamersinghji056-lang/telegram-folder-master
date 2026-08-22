@@ -44,18 +44,21 @@ export function registerConfiguredModelProviders({
   fetchImpl,
 } = {}) {
   const baseUrl = String(env.AI_BASE_URL || "").trim();
+  const model = String(env.AI_MODEL || "").trim();
 
-  if (!baseUrl) {
+  if (!baseUrl || !model) {
     return [];
   }
 
   const provider = createOpenAiCompatibleProvider({
     baseUrl,
     apiKey: env.AI_API_KEY || null,
-    model: env.AI_MODEL || null,
+    model,
     fetchImpl,
   });
 
   registry.registerModelProvider(provider);
   return [provider];
 }
+
+registerConfiguredModelProviders();

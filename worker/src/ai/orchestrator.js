@@ -12,7 +12,7 @@ export function createAiOrchestrator({ router = modelRouter } = {}) {
         return createAiErrorResponse({
           requestId: request.id,
           code: "ai_provider_not_configured",
-          message: "Personal AI Representative is not connected to an AI provider yet.",
+          message: "AI provider is not configured yet.",
           modelRole,
         });
       }

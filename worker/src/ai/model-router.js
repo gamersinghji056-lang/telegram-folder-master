@@ -1,6 +1,19 @@
 import { normalizeModelRole } from "./contract.js";
 import { modelRegistry } from "./model-registry.js";
 
+export function configuredRoleProviders(env = process.env) {
+  if (!String(env.AI_BASE_URL || "").trim() || !String(env.AI_MODEL || "").trim()) {
+    return {};
+  }
+
+  return {
+    fast: "openai-compatible",
+    general: "openai-compatible",
+    reasoning: "openai-compatible",
+    coding: "openai-compatible",
+  };
+}
+
 export function createModelRouter({
   registry = modelRegistry,
   defaultProviderId = null,
@@ -35,4 +48,6 @@ export function createModelRouter({
   };
 }
 
-export const modelRouter = createModelRouter();
+export const modelRouter = createModelRouter({
+  roleProviders: configuredRoleProviders(),
+});

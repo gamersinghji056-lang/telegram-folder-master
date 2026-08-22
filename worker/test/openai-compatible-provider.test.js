@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createAgentContext, createAiRequest } from "../src/ai/contract.js";
 import { createModelRegistry, registerConfiguredModelProviders } from "../src/ai/model-registry.js";
+import { configuredRoleProviders } from "../src/ai/model-router.js";
 import { OpenAiCompatibleProvider } from "../src/ai/providers/openai-compatible-provider.js";
 
 function response({ status = 200, body }) {
@@ -174,6 +175,20 @@ test("configured provider registration is inactive without AI_BASE_URL", () => {
   assert.deepEqual(registry.listModelProviders(), []);
 });
 
+test("configured provider registration is inactive without AI_MODEL", () => {
+  const registry = createModelRegistry();
+  const registered = registerConfiguredModelProviders({
+    env: {
+      AI_BASE_URL: "http://localhost:11434/v1",
+    },
+    registry,
+    fetchImpl: async () => response({ body: "{}" }),
+  });
+
+  assert.deepEqual(registered, []);
+  assert.deepEqual(registry.listModelProviders(), []);
+});
+
 test("configured provider registration registers OpenAI-compatible provider when AI_BASE_URL exists", () => {
   const registry = createModelRegistry();
   const registered = registerConfiguredModelProviders({
@@ -187,4 +202,22 @@ test("configured provider registration registers OpenAI-compatible provider when
 
   assert.equal(registered.length, 1);
   assert.equal(registry.getModelProvider("openai-compatible"), registered[0]);
+});
+
+test("configured role providers are only active when base URL and model are configured", () => {
+  assert.deepEqual(configuredRoleProviders({}), {});
+  assert.deepEqual(configuredRoleProviders({ AI_BASE_URL: "http://localhost:11434/v1" }), {});
+  assert.deepEqual(configuredRoleProviders({ AI_MODEL: "qwen2.5-coder:3b" }), {});
+  assert.deepEqual(
+    configuredRoleProviders({
+      AI_BASE_URL: "http://localhost:11434/v1",
+      AI_MODEL: "qwen2.5-coder:3b",
+    }),
+    {
+      fast: "openai-compatible",
+      general: "openai-compatible",
+      reasoning: "openai-compatible",
+      coding: "openai-compatible",
+    },
+  );
 });

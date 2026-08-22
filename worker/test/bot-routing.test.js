@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createAgentService } from "../src/agents/agent-service.js";
+import { createModelRegistry } from "../src/ai/model-registry.js";
+import { createModelRouter } from "../src/ai/model-router.js";
+import { createAiOrchestrator } from "../src/ai/orchestrator.js";
 import { createTelegramMessageRouter } from "../src/bot.js";
 
 const LINK_MESSAGE = "Your Telegram account is not connected yet. Open the Mini App first.";
@@ -66,7 +70,7 @@ function makeRouter({
 
       return {
         ok: false,
-        text: "Personal AI Representative is not connected to an AI provider yet.",
+        text: "AI provider is not configured yet.",
       };
     },
     getBotMeta: () => ({ botUsername, botId }),
@@ -88,7 +92,7 @@ test("private chat routing sends linked users through AI orchestration", async (
   assert.equal(aiCalls[0].chat.type, "private");
   assert.equal(aiCalls[0].text, "hello representative");
   assert.equal(sent.length, 1);
-  assert.match(sent[0].text, /Personal AI Representative/);
+  assert.equal(sent[0].text, "AI provider is not configured yet.");
   assert.equal(mini.length, 0);
 });
 
@@ -197,4 +201,154 @@ test("group folder-merger commands with bot suffix still work", async () => {
   assert.match(sent[1].text, /Telegram account: @linked_user/);
   assert.equal(mini.length, 1);
   assert.match(mini[0].text, /Open the Mini App/);
+});
+
+function makeAiBackedRouter({ providerComplete, linked = true } = {}) {
+  const sent = [];
+  const mini = [];
+  const providerCalls = [];
+  const registry = createModelRegistry();
+
+  registry.registerModelProvider({
+    id: "test-provider",
+    name: "Test Provider",
+    roles: ["general"],
+    complete: async (request) => {
+      providerCalls.push(request);
+      if (providerComplete) return providerComplete(request);
+      return {
+        ok: true,
+        message: `AI reply: ${request.input.text}`,
+      };
+    },
+  });
+
+  const router = createModelRouter({
+    registry,
+    roleProviders: {
+      general: "test-provider",
+    },
+  });
+  const orchestrator = createAiOrchestrator({ router });
+  const agentService = createAgentService({
+    requireSession: async () => {
+      if (!linked) throw new Error(LINK_MESSAGE);
+      return { ok: true };
+    },
+    runTurn: (request) => orchestrator.runAiTurn(request),
+  });
+
+  const route = createTelegramMessageRouter({
+    sendMessage: async (chatId, text, extra = {}) => {
+      sent.push({ chatId, text, extra });
+    },
+    sendMiniAppMessage: async (chatId, text = "Open the Mini App to continue.", extra = {}) => {
+      mini.push({ chatId, text, extra });
+    },
+    getTelegramMe: async () => ({ username: "linked_user" }),
+    cancelTelegramLogin: async () => {},
+    handleAiMessage: (request) => agentService.handleRepresentativeMessage(request),
+    getBotMeta: () => ({ botUsername: "phasebot", botId: 777 }),
+    getState: () => ({ apiId: 1234, apiHash: "hash", botToken: "token" }),
+    miniAppUrl: "https://example.test/mini-app",
+    helpText: "HELP TEXT",
+  });
+
+  return { route, sent, mini, providerCalls };
+}
+
+test("private linked user gets AI reply through Agent Service and provider", async () => {
+  const { route, sent, mini, providerCalls } = makeAiBackedRouter();
+
+  await route(privateUpdate("write a short reply"));
+
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].input.text, "write a short reply");
+  assert.equal(providerCalls[0].model.role, "general");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, "AI reply: write a short reply");
+  assert.equal(mini.length, 0);
+});
+
+test("private provider error is handled safely and does not crash routing", async () => {
+  const { route, sent, mini, providerCalls } = makeAiBackedRouter({
+    providerComplete: async () => {
+      throw new Error("raw provider failure");
+    },
+  });
+
+  await route(privateUpdate("trigger failure"));
+
+  assert.equal(providerCalls.length, 1);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /could not complete/);
+  assert.doesNotMatch(sent[0].text, /raw provider failure/);
+  assert.equal(mini.length, 0);
+});
+
+test("private missing provider returns clean not-configured message", async () => {
+  const sent = [];
+  const mini = [];
+  const registry = createModelRegistry();
+  const router = createModelRouter({
+    registry,
+    roleProviders: {
+      general: "missing-provider",
+    },
+  });
+  const orchestrator = createAiOrchestrator({ router });
+  const agentService = createAgentService({
+    requireSession: async () => ({ ok: true }),
+    runTurn: (request) => orchestrator.runAiTurn(request),
+  });
+  const route = createTelegramMessageRouter({
+    sendMessage: async (chatId, text, extra = {}) => sent.push({ chatId, text, extra }),
+    sendMiniAppMessage: async (chatId, text = "Open the Mini App to continue.", extra = {}) =>
+      mini.push({ chatId, text, extra }),
+    getTelegramMe: async () => ({ username: "linked_user" }),
+    cancelTelegramLogin: async () => {},
+    handleAiMessage: (request) => agentService.handleRepresentativeMessage(request),
+    getBotMeta: () => ({ botUsername: "phasebot", botId: 777 }),
+    getState: () => ({ apiId: 1234, apiHash: "hash", botToken: "token" }),
+  });
+
+  await route(privateUpdate("hello"));
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, "AI provider is not configured yet.");
+  assert.equal(mini.length, 0);
+});
+
+test("group mention gets AI reply through provider", async () => {
+  const { route, sent, mini, providerCalls } = makeAiBackedRouter();
+
+  await route(groupUpdate("@phasebot summarize this thread"));
+
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].input.text, "summarize this thread");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, "AI reply: summarize this thread");
+  assert.equal(sent[0].extra.reply_to_message_id, 20);
+  assert.equal(mini.length, 0);
+});
+
+test("AI-backed router ignores normal group message", async () => {
+  const { route, sent, mini, providerCalls } = makeAiBackedRouter();
+
+  await route(groupUpdate("do not route this"));
+
+  assert.equal(providerCalls.length, 0);
+  assert.equal(sent.length, 0);
+  assert.equal(mini.length, 0);
+});
+
+test("AI-backed router blocks unlinked user before provider call", async () => {
+  const { route, sent, mini, providerCalls } = makeAiBackedRouter({ linked: false });
+
+  await route(privateUpdate("hello"));
+
+  assert.equal(providerCalls.length, 0);
+  assert.equal(sent.length, 0);
+  assert.equal(mini.length, 1);
+  assert.match(mini[0].text, /Open the Mini App first/);
 });

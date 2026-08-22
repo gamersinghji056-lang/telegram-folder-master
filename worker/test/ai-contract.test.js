@@ -130,7 +130,7 @@ test("missing provider is handled without calling a model", async () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "ai_provider_not_configured");
-  assert.match(result.text, /not connected to an AI provider yet/);
+  assert.equal(result.text, "AI provider is not configured yet.");
 });
 
 test("customer and agent context is preserved through the provider request", async () => {
@@ -165,7 +165,7 @@ test("Telegram layer delegates to Agent Service and never calls a provider direc
       delegatedRequests.push(request);
       return {
         ok: false,
-        text: "Personal AI Representative is not connected to an AI provider yet.",
+        text: "AI provider is not configured yet.",
       };
     },
     getBotMeta: () => ({ botUsername: "phasebot", botId: 777 }),
