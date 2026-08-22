@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
     "keygen": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
   },
   "dependencies": {

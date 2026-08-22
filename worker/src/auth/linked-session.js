@@ -10,17 +10,25 @@ function normalizeBotUserId(botUserId) {
   return id;
 }
 
-export async function requireLinkedSession(botUserId) {
-  const id = normalizeBotUserId(botUserId);
-  const client = await getClient(id);
-  const authorized = await client.isUserAuthorized();
+export function createLinkedSessionGuard({ getClient: loadClient }) {
+  return async function requireLinkedSessionForUser(botUserId) {
+    const id = normalizeBotUserId(botUserId);
+    const client = await loadClient(id);
+    const authorized = await client.isUserAuthorized();
 
-  if (!authorized) {
-    throw new Error("Your Telegram account is not connected yet. Open the Mini App first.");
-  }
+    if (!authorized) {
+      throw new Error("Your Telegram account is not connected yet. Open the Mini App first.");
+    }
 
-  return {
-    botUserId: id,
-    client,
+    return {
+      botUserId: id,
+      client,
+    };
   };
+}
+
+export const requireLinkedSession = createLinkedSessionGuard({ getClient });
+
+export function __testNormalizeBotUserId(botUserId) {
+  return normalizeBotUserId(botUserId);
 }

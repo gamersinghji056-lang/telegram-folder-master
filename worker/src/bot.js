@@ -57,49 +57,8 @@ function isPrivateChat(msg) {
   return chatType(msg) === "private";
 }
 
-function commandTextForBot(text) {
-  const value = String(text || "").trim();
-  if (!botUsername) return value;
-
-  return value.replace(new RegExp(`^/(\\w+)@${botUsername}\\b`, "i"), "/$1");
-}
-
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isReplyToBot(msg) {
-  const from = msg?.reply_to_message?.from;
-  if (!from?.is_bot) return false;
-  if (botId && Number(from.id) === Number(botId)) return true;
-  return Boolean(
-    botUsername && String(from.username || "").toLowerCase() === botUsername.toLowerCase(),
-  );
-}
-
-function mentionsBot(msg) {
-  const text = String(msg?.text || "");
-  if (!botUsername) return false;
-
-  const username = `@${botUsername}`.toLowerCase();
-  const mentionPattern = new RegExp(`(^|\\s)@${escapeRegExp(botUsername)}\\b`, "i");
-  if (mentionPattern.test(text)) return true;
-
-  return (msg.entities || []).some((entity) => {
-    if (entity.type !== "mention") return false;
-    const mention = text.slice(entity.offset, entity.offset + entity.length).toLowerCase();
-    return mention === username;
-  });
-}
-
-function shouldHandleGroupMessage(msg) {
-  return mentionsBot(msg) || isReplyToBot(msg);
-}
-
-function representativeText(msg) {
-  const text = String(msg?.text || "").trim();
-  if (!botUsername) return text;
-  return text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
 }
 
 async function send(chatId, text, extra = {}) {
@@ -116,11 +75,12 @@ async function send(chatId, text, extra = {}) {
   }
 }
 
-async function sendMiniApp(chatId, text = "Open the Mini App to continue.") {
+async function sendMiniApp(chatId, text = "Open the Mini App to continue.", extra = {}) {
   if (!MINI_APP_URL) {
     await send(
       chatId,
       "Mini App URL is not configured. Set APP_URL or MINI_APP_URL on the worker.",
+      extra,
     );
     return;
   }
@@ -136,111 +96,210 @@ async function sendMiniApp(chatId, text = "Open the Mini App to continue.") {
         ],
       ],
     },
+    ...extra,
   });
 }
 
-async function handleStatus(chatId, botUserId) {
-  let account = "not connected";
-
-  try {
-    const me = await getMe(botUserId);
-    account = me.username ? `@${me.username}` : me.firstName || "connected";
-  } catch {
-    account = "not connected";
+export function createTelegramMessageRouter({
+  sendMessage,
+  sendMiniAppMessage,
+  getTelegramMe,
+  cancelTelegramLogin,
+  handleAiMessage,
+  getBotMeta = () => ({ botUsername, botId }),
+  getState = () => state,
+  miniAppUrl = MINI_APP_URL,
+  helpText = HELP,
+}) {
+  function currentBotUsername() {
+    return getBotMeta().botUsername;
   }
 
-  const parts = [
-    `Telegram API: ${state.apiId && state.apiHash ? "configured" : "missing"}`,
-    `Telegram account: ${account}`,
-    `Bot: ${botUsername ? "@" + botUsername : "not running"}`,
-    `Mini App: ${MINI_APP_URL || "not configured"}`,
-  ];
-  await send(chatId, parts.join("\n"));
-}
-
-async function handleCancel(chatId, botUserId) {
-  await cancelLogin(botUserId).catch(() => {});
-  await send(chatId, "Cancelled any pending Telegram login. Open the Mini App to continue.");
-}
-
-async function handleCommand({ msg, chatId, botUserId, text }) {
-  if (text.startsWith("/start")) return void sendMiniApp(chatId);
-  if (text.startsWith("/connect")) {
-    return void sendMiniApp(chatId, "Connect your Telegram account inside the Mini App.");
-  }
-  if (text.startsWith("/addfolder")) {
-    return void sendMiniApp(chatId, "Add and analyze folder links inside the Mini App.");
-  }
-  if (text.startsWith("/help")) return void send(chatId, HELP);
-  if (text.startsWith("/cancel")) return void handleCancel(chatId, botUserId);
-  if (text.startsWith("/status")) return void handleStatus(chatId, botUserId);
-
-  if (isPrivateChat(msg)) {
-    await sendMiniApp(chatId, HELP);
-  }
-}
-
-async function handlePrivateMessage(msg) {
-  const chatId = msg.chat.id;
-  const botUserId = botUserIdFrom(msg);
-  const text = commandTextForBot(msg.text);
-
-  if (!botUserId) {
-    await send(chatId, "I could not identify your Telegram user ID.");
-    return;
+  function currentBotId() {
+    return getBotMeta().botId;
   }
 
-  await handleCommand({ msg, chatId, botUserId, text });
-}
+  function localCommandTextForBot(text) {
+    const value = String(text || "").trim();
+    const username = currentBotUsername();
+    if (!username) return value;
 
-async function handleGroupMessage(msg) {
-  if (!shouldHandleGroupMessage(msg)) return;
-
-  const chatId = msg.chat.id;
-  const botUserId = botUserIdFrom(msg);
-  const text = commandTextForBot(msg.text);
-
-  if (!botUserId) {
-    await send(chatId, "I could not identify your Telegram user ID.");
-    return;
+    return value.replace(new RegExp(`^/(\\w+)@${escapeRegExp(username)}\\b`, "i"), "/$1");
   }
 
-  if (text.startsWith("/")) {
-    await handleCommand({ msg, chatId, botUserId, text });
-    return;
+  function localIsReplyToBot(msg) {
+    const from = msg?.reply_to_message?.from;
+    const id = currentBotId();
+    const username = currentBotUsername();
+    if (!from?.is_bot) return false;
+    if (id && Number(from.id) === Number(id)) return true;
+    return Boolean(
+      username && String(from.username || "").toLowerCase() === username.toLowerCase(),
+    );
   }
 
-  try {
-    const response = await handleRepresentativeMessage({
-      botUserId,
-      chat: {
-        id: chatId,
-        type: chatType(msg),
-        title: msg.chat.title || null,
-      },
-      text: representativeText(msg),
+  function localMentionsBot(msg) {
+    const text = String(msg?.text || "");
+    const usernameValue = currentBotUsername();
+    if (!usernameValue) return false;
+
+    const username = `@${usernameValue}`.toLowerCase();
+    const mentionPattern = new RegExp(`(^|\\s)@${escapeRegExp(usernameValue)}\\b`, "i");
+    const commandPattern = new RegExp(`^/\\w+@${escapeRegExp(usernameValue)}\\b`, "i");
+    if (commandPattern.test(text)) return true;
+    if (mentionPattern.test(text)) return true;
+
+    return (msg.entities || []).some((entity) => {
+      if (entity.type !== "mention") return false;
+      const mention = text.slice(entity.offset, entity.offset + entity.length).toLowerCase();
+      return mention === username;
     });
+  }
 
-    if (response?.text) {
-      await send(chatId, response.text, { reply_to_message_id: msg.message_id });
+  function localShouldHandleGroupMessage(msg) {
+    return localMentionsBot(msg) || localIsReplyToBot(msg);
+  }
+
+  function localRepresentativeText(msg) {
+    const text = String(msg?.text || "").trim();
+    const username = currentBotUsername();
+    if (!username) return text;
+    return text.replace(new RegExp(`@${escapeRegExp(username)}\\b`, "gi"), "").trim();
+  }
+
+  async function localHandleStatus(chatId, botUserId) {
+    let account = "not connected";
+
+    try {
+      const me = await getTelegramMe(botUserId);
+      account = me.username ? `@${me.username}` : me.firstName || "connected";
+    } catch {
+      account = "not connected";
     }
-  } catch (e) {
-    await send(chatId, e.message || "Open the Mini App to connect your Telegram account.", {
-      reply_to_message_id: msg.message_id,
-    });
+
+    const currentState = getState();
+    const meta = getBotMeta();
+    const parts = [
+      `Telegram API: ${currentState.apiId && currentState.apiHash ? "configured" : "missing"}`,
+      `Telegram account: ${account}`,
+      `Bot: ${meta.botUsername ? "@" + meta.botUsername : "not running"}`,
+      `Mini App: ${miniAppUrl || "not configured"}`,
+    ];
+    await sendMessage(chatId, parts.join("\n"));
   }
+
+  async function localHandleCancel(chatId, botUserId) {
+    await cancelTelegramLogin(botUserId).catch(() => {});
+    await sendMessage(
+      chatId,
+      "Cancelled any pending Telegram login. Open the Mini App to continue.",
+    );
+  }
+
+  async function localHandleCommand({ msg, chatId, botUserId, text }) {
+    if (text.startsWith("/start")) return void sendMiniAppMessage(chatId);
+    if (text.startsWith("/connect")) {
+      return void sendMiniAppMessage(chatId, "Connect your Telegram account inside the Mini App.");
+    }
+    if (text.startsWith("/addfolder")) {
+      return void sendMiniAppMessage(chatId, "Add and analyze folder links inside the Mini App.");
+    }
+    if (text.startsWith("/help")) return void sendMessage(chatId, helpText);
+    if (text.startsWith("/cancel")) return void localHandleCancel(chatId, botUserId);
+    if (text.startsWith("/status")) return void localHandleStatus(chatId, botUserId);
+
+    if (isPrivateChat(msg) && text.startsWith("/")) {
+      await sendMiniAppMessage(chatId, helpText);
+    }
+  }
+
+  async function localHandleRepresentativeRoute(msg, botUserId, chatId) {
+    try {
+      const response = await handleAiMessage({
+        botUserId,
+        chat: {
+          id: chatId,
+          type: chatType(msg),
+          title: msg.chat.title || null,
+        },
+        text: localRepresentativeText(msg),
+      });
+
+      if (response?.text) {
+        const extra = isPrivateChat(msg) ? {} : { reply_to_message_id: msg.message_id };
+        await sendMessage(chatId, response.text, extra);
+      }
+    } catch (e) {
+      const extra = isPrivateChat(msg) ? {} : { reply_to_message_id: msg.message_id };
+      await sendMiniAppMessage(
+        chatId,
+        e.message || "Open the Mini App to connect your Telegram account.",
+        extra,
+      );
+    }
+  }
+
+  async function localHandlePrivateMessage(msg) {
+    const chatId = msg.chat.id;
+    const botUserId = botUserIdFrom(msg);
+    const text = localCommandTextForBot(msg.text);
+
+    if (!botUserId) {
+      await sendMessage(chatId, "I could not identify your Telegram user ID.");
+      return;
+    }
+
+    if (text.startsWith("/")) {
+      await localHandleCommand({ msg, chatId, botUserId, text });
+      return;
+    }
+
+    await localHandleRepresentativeRoute(msg, botUserId, chatId);
+  }
+
+  async function localHandleGroupMessage(msg) {
+    if (!localShouldHandleGroupMessage(msg)) return;
+
+    const chatId = msg.chat.id;
+    const botUserId = botUserIdFrom(msg);
+    const text = localCommandTextForBot(msg.text);
+
+    if (!botUserId) {
+      await sendMessage(chatId, "I could not identify your Telegram user ID.");
+      return;
+    }
+
+    if (text.startsWith("/")) {
+      await localHandleCommand({ msg, chatId, botUserId, text });
+      return;
+    }
+
+    await localHandleRepresentativeRoute(msg, botUserId, chatId);
+  }
+
+  return async function routeTelegramUpdate(update) {
+    const msg = update.message;
+    if (!msg?.text || !msg.chat) return;
+
+    if (isPrivateChat(msg)) {
+      await localHandlePrivateMessage(msg);
+      return;
+    }
+
+    await localHandleGroupMessage(msg);
+  };
 }
+
+const routeUpdate = createTelegramMessageRouter({
+  sendMessage: send,
+  sendMiniAppMessage: sendMiniApp,
+  getTelegramMe: getMe,
+  cancelTelegramLogin: cancelLogin,
+  handleAiMessage: handleRepresentativeMessage,
+});
 
 async function handleUpdate(update) {
-  const msg = update.message;
-  if (!msg?.text || !msg.chat) return;
-
-  if (isPrivateChat(msg)) {
-    await handlePrivateMessage(msg);
-    return;
-  }
-
-  await handleGroupMessage(msg);
+  await routeUpdate(update);
 }
 
 export async function startBot() {

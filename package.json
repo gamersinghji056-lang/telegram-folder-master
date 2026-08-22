@@ -2,13 +2,14 @@
   "name": "tanstack_start_ts",
   "private": true,
   "engines": {
-  "node": "22.x"
-},
+    "node": "22.x"
+  },
   "sideEffects": false,
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "start": "cd worker && node src/index.js",
+    "test:worker": "node --test worker/test/*.test.js",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
