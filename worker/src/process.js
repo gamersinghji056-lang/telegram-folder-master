@@ -1,5 +1,6 @@
 import { api } from "./api.js";
-import { Api, getClient, withFloodWait } from "./tg.js";
+import { requireLinkedSession } from "./auth/linked-session.js";
+import { Api, withFloodWait } from "./tg.js";
 
 const SLUG_RE = /(?:t\.me|telegram\.me)\/(?:addlist|list)\/([A-Za-z0-9_-]+)/i;
 
@@ -251,7 +252,7 @@ async function refreshTotals(jobId) {
 }
 
 export async function analyzeFolders({ botUserId, urls, botChatId = null, report }) {
-  const client = await getClient(botUserId);
+  const { client } = await requireLinkedSession(botUserId);
   const parsed = urls.map(parseFolderLink).filter(Boolean);
 
   if (parsed.length === 0) {
@@ -443,7 +444,7 @@ async function exportShareLink({ client, filterId, folderName, peers, report }) 
 }
 
 export async function joinAndCreateFolder({ botUserId, jobId, folderName, report }) {
-  const client = await getClient(botUserId);
+  const { client } = await requireLinkedSession(botUserId);
   const details = await api("jobAnalysisDetails", { job_id: jobId, bot_user_id: botUserId });
   const rows = details.groups ?? [];
   const foldersById = new Map((details.folders ?? []).map((f) => [f.id, f]));
