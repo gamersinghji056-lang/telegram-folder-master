@@ -10,6 +10,7 @@
     "dev": "vite dev",
     "start": "cd worker && node src/index.js",
     "test:worker": "node --test worker/test/*.test.js",
+    "test:ai-live": "node worker/scripts/ai-live-smoke.js",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",

@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/*.test.js",
+    "test:ai-live": "node scripts/ai-live-smoke.js",
     "keygen": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
   },
   "dependencies": {
