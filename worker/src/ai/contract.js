@@ -38,6 +38,7 @@ export function createAiRequest({
   modelRole = DEFAULT_MODEL_ROLE,
   input,
   context,
+  config = {},
   metadata = {},
 } = {}) {
   return {
@@ -51,6 +52,7 @@ export function createAiRequest({
       chat: input?.chat || null,
     },
     context: context || createAgentContext(),
+    config,
     metadata,
   };
 }

@@ -1,3 +1,5 @@
+import { createOpenAiCompatibleProvider } from "./providers/openai-compatible-provider.js";
+
 export function createModelRegistry() {
   const providers = new Map();
 
@@ -35,3 +37,25 @@ export const registerModelProvider = modelRegistry.registerModelProvider;
 export const getModelProvider = modelRegistry.getModelProvider;
 export const listModelProviders = modelRegistry.listModelProviders;
 export const clearModelProviders = modelRegistry.clearModelProviders;
+
+export function registerConfiguredModelProviders({
+  env = process.env,
+  registry = modelRegistry,
+  fetchImpl,
+} = {}) {
+  const baseUrl = String(env.AI_BASE_URL || "").trim();
+
+  if (!baseUrl) {
+    return [];
+  }
+
+  const provider = createOpenAiCompatibleProvider({
+    baseUrl,
+    apiKey: env.AI_API_KEY || null,
+    model: env.AI_MODEL || null,
+    fetchImpl,
+  });
+
+  registry.registerModelProvider(provider);
+  return [provider];
+}
