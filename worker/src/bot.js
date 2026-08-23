@@ -1,5 +1,8 @@
 import { api, botApi } from "./api.js";
 import { handleRepresentativeMessage } from "./agents/agent-service.js";
+import { trainingService as defaultTrainingService } from "./agents/training-service.js";
+import { DEFAULT_AGENT_ID } from "./agents/profile-service.js";
+import { requireLinkedSession } from "./auth/linked-session.js";
 import { state, loadConfig, getMe, cancelLogin } from "./tg.js";
 
 let call = null;
@@ -57,7 +60,7 @@ function defaultMiniAppUrl() {
 
 const MINI_APP_URL = cleanBaseUrl(process.env.MINI_APP_URL) || defaultMiniAppUrl();
 
-const HELP = [
+const BASE_HELP = [
   "Telegram Folder Merger",
   "",
   "Open the Mini App to connect your Telegram account, analyze folder links, and create a clean folder.",
@@ -67,6 +70,16 @@ const HELP = [
   "/cancel - cancel a pending Telegram login",
   "/help - this message",
 ].join("\n");
+
+const TRAINING_HELP = [
+  "/train - train your Personal AI Representative",
+  "/train_status - show training progress",
+  "/train_cancel - cancel active training",
+  "/remember <instruction> - save an owner instruction",
+  "/instructions - list active owner instructions",
+].join("\n");
+
+const HELP = [BASE_HELP, isLocalDevMode() ? TRAINING_HELP : ""].filter(Boolean).join("\n");
 
 function botUserIdFrom(msg) {
   const id = Number(msg?.from?.id);
@@ -130,6 +143,10 @@ export function createTelegramMessageRouter({
   getTelegramMe,
   cancelTelegramLogin,
   handleAiMessage,
+  trainingService = defaultTrainingService,
+  requireTrainingSession = requireLinkedSession,
+  trainingAgentId = DEFAULT_AGENT_ID,
+  enableTrainingCommands = isLocalDevMode(),
   getBotMeta = () => ({ botUsername, botId }),
   getState = () => state,
   miniAppUrl = MINI_APP_URL,
@@ -220,7 +237,95 @@ export function createTelegramMessageRouter({
     );
   }
 
+  function trainingCommandPayload(text, command) {
+    return String(text || "")
+      .replace(new RegExp(`^/${command}\\b`, "i"), "")
+      .trim();
+  }
+
+  function isTrainingCommand(text) {
+    return /^\/(train|train_status|train_cancel|remember|instructions)\b/i.test(
+      String(text || "").trim(),
+    );
+  }
+
+  async function localRequireTrainingSession(botUserId) {
+    await requireTrainingSession(botUserId);
+  }
+
+  async function localHandleTrainingCommand({ msg, chatId, botUserId, text }) {
+    if (!enableTrainingCommands) return false;
+    if (!isTrainingCommand(text)) return false;
+
+    if (!isPrivateChat(msg)) {
+      await sendMessage(chatId, "Training commands are only available in private chat.", {
+        reply_to_message_id: msg.message_id,
+      });
+      return true;
+    }
+
+    await localRequireTrainingSession(botUserId);
+
+    if (/^\/train_status\b/i.test(text)) {
+      const result = await trainingService.status({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+      });
+      await sendMessage(chatId, result.text);
+      return true;
+    }
+
+    if (/^\/train_cancel\b/i.test(text)) {
+      const result = await trainingService.cancel({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+      });
+      await sendMessage(chatId, result.text);
+      return true;
+    }
+
+    if (/^\/remember\b/i.test(text)) {
+      const result = await trainingService.remember({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+        text: trainingCommandPayload(text, "remember"),
+      });
+      await sendMessage(chatId, result.text);
+      return true;
+    }
+
+    if (/^\/instructions\b/i.test(text)) {
+      const result = await trainingService.listInstructions({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+      });
+      await sendMessage(chatId, result.text);
+      return true;
+    }
+
+    if (/^\/train\b/i.test(text)) {
+      const result = await trainingService.start({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+      });
+      await sendMessage(chatId, result.text);
+      return true;
+    }
+
+    return false;
+  }
+
   async function localHandleCommand({ msg, chatId, botUserId, text }) {
+    try {
+      if (await localHandleTrainingCommand({ msg, chatId, botUserId, text })) return;
+    } catch (e) {
+      await sendMiniAppMessage(
+        chatId,
+        e.message || "Open the Mini App to connect your Telegram account.",
+      );
+      return;
+    }
+
     if (text.startsWith("/start")) return void sendMiniAppMessage(chatId);
     if (text.startsWith("/connect")) {
       return void sendMiniAppMessage(chatId, "Connect your Telegram account inside the Mini App.");
@@ -234,6 +339,36 @@ export function createTelegramMessageRouter({
 
     if (isPrivateChat(msg) && text.startsWith("/")) {
       await sendMiniAppMessage(chatId, helpText);
+    }
+  }
+
+  async function localHandleTrainingAnswer({ msg, chatId, botUserId, text }) {
+    if (!enableTrainingCommands) return false;
+    if (!isPrivateChat(msg)) return false;
+    if (
+      !(await trainingService.isOnboardingActive({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+      }))
+    ) {
+      return false;
+    }
+
+    try {
+      await localRequireTrainingSession(botUserId);
+      const result = await trainingService.submitAnswer({
+        ownerId: botUserId,
+        agentId: trainingAgentId,
+        answer: text,
+      });
+      await sendMessage(chatId, result.text);
+      return true;
+    } catch (e) {
+      await sendMiniAppMessage(
+        chatId,
+        e.message || "Open the Mini App to connect your Telegram account.",
+      );
+      return true;
     }
   }
 
@@ -277,6 +412,8 @@ export function createTelegramMessageRouter({
       await localHandleCommand({ msg, chatId, botUserId, text });
       return;
     }
+
+    if (await localHandleTrainingAnswer({ msg, chatId, botUserId, text })) return;
 
     await localHandleRepresentativeRoute(msg, botUserId, chatId);
   }

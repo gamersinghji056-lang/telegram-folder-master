@@ -8,7 +8,7 @@ import {
 export const STARTER_ONBOARDING_QUESTIONS = Object.freeze([
   {
     id: "owner_work",
-    prompt: "What do you do?",
+    prompt: "What should I call you?",
     profileField: "ownerName",
   },
   {
@@ -143,9 +143,16 @@ export function createOnboardingService({
       });
     },
 
+    async resumeOrStartOnboarding({ ownerId, agentId = DEFAULT_AGENT_ID }) {
+      const existing = await repository.getSession({ ownerId, agentId });
+      if (existing?.status === "in_progress") return existing;
+      if (existing?.status === "completed") return existing;
+      return this.startOnboarding({ ownerId, agentId });
+    },
+
     async getNextQuestion({ ownerId, agentId = DEFAULT_AGENT_ID }) {
       const session = await repository.getSession({ ownerId, agentId });
-      if (!session || session.status === "completed") return null;
+      if (!session || session.status !== "in_progress") return null;
       const answered = new Set(Object.keys(session.answers || {}));
       const nextId = session.questionOrder.find((questionId) => !answered.has(questionId));
       return nextId ? questionById(nextId) : null;
@@ -201,6 +208,31 @@ export function createOnboardingService({
         };
       }
       return progress(session);
+    },
+
+    async cancelOnboarding({ ownerId, agentId = DEFAULT_AGENT_ID }) {
+      const session = await repository.getSession({ ownerId, agentId });
+      if (!session) {
+        return {
+          ownerId: normalizeOwnerId(ownerId),
+          agentId: normalizeAgentId(agentId),
+          status: "not_started",
+          answered: 0,
+          total: questions.length,
+          percent: 0,
+        };
+      }
+
+      const cancelled = await repository.saveSession({
+        ...session,
+        status: "cancelled",
+      });
+      await profileService.updateProfile({
+        ownerId,
+        agentId,
+        patch: { onboardingStatus: "cancelled" },
+      });
+      return progress(cancelled);
     },
 
     async completeOnboarding({ ownerId, agentId = DEFAULT_AGENT_ID }) {
