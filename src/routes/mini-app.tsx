@@ -99,8 +99,43 @@ type HistoryFolder = {
   updated_at: string;
 };
 
+type AgentProfile = {
+  aiDisplayName: string;
+  ownerName: string;
+  businessOrProfession: string;
+  businessDescription: string;
+  aiPurpose: string;
+  preferredLanguages: string[];
+  communicationTone: string;
+  productsServices: string[];
+  allowedToShare: string[];
+  restrictedPrivateInfo: string[];
+  alwaysFollow: string[];
+  neverDo: string[];
+  onboardingStatus: string;
+};
+
+type TrainingStatus = {
+  status: string;
+  text: string;
+};
+
+type OwnerInstruction = {
+  id: string;
+  category: string;
+  text: string;
+  enabled: boolean;
+};
+
+type AiTrainingPayload = {
+  training: TrainingStatus;
+  profile: AgentProfile;
+  instructions: OwnerInstruction[];
+  result?: { text: string; status: string };
+};
+
 type Stage = "loading" | "phone" | "code" | "password" | "app";
-type View = "dashboard" | "create" | "history" | "account";
+type View = "dashboard" | "train" | "profile" | "instructions" | "create" | "history" | "account";
 
 export const Route = createFileRoute("/mini-app")({
   head: () => ({
@@ -180,6 +215,15 @@ export function MiniApp() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [result, setResult] = useState<FinalResult | null>(null);
   const [history, setHistory] = useState<HistoryFolder[]>([]);
+  const [training, setTraining] = useState<TrainingStatus | null>(null);
+  const [profile, setProfile] = useState<AgentProfile | null>(null);
+  const [instructions, setInstructions] = useState<OwnerInstruction[]>([]);
+  const [trainingAnswer, setTrainingAnswer] = useState("");
+  const [profileDraft, setProfileDraft] = useState<Partial<AgentProfile>>({});
+  const [instructionText, setInstructionText] = useState("");
+  const [instructionCategory, setInstructionCategory] = useState("custom");
+  const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
+  const [editingInstructionText, setEditingInstructionText] = useState("");
   const [view, setView] = useState<View>("dashboard");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -229,6 +273,23 @@ export function MiniApp() {
     [initData],
   );
 
+  function applyAiPayload(payload: Partial<AiTrainingPayload>) {
+    if (payload.training) setTraining(payload.training);
+    if (payload.profile) {
+      setProfile(payload.profile);
+      setProfileDraft(payload.profile);
+    }
+    if (payload.instructions) setInstructions(payload.instructions);
+  }
+
+  const refreshAiTraining = useCallback(
+    async function refreshAiTraining() {
+      const data = await mini<AiTrainingPayload>("aiTrainingStatus");
+      applyAiPayload(data);
+    },
+    [mini],
+  );
+
   const refresh = useCallback(
     async function refresh() {
       setBusy(true);
@@ -242,6 +303,7 @@ export function MiniApp() {
             folders: [],
           }));
           setHistory(saved.folders ?? []);
+          await refreshAiTraining().catch(() => {});
         }
       } catch (e) {
         setError((e as Error).message);
@@ -250,7 +312,7 @@ export function MiniApp() {
         setBusy(false);
       }
     },
-    [mini],
+    [mini, refreshAiTraining],
   );
 
   useEffect(() => {
@@ -365,6 +427,144 @@ export function MiniApp() {
     }
   }
 
+  async function startTraining() {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await mini<AiTrainingPayload>("aiTrainingStart");
+      applyAiPayload(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitTrainingAnswer(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await mini<AiTrainingPayload>("aiTrainingAnswer", {
+        answer: trainingAnswer,
+      });
+      setTrainingAnswer("");
+      applyAiPayload(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelTraining() {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await mini<AiTrainingPayload>("aiTrainingCancel");
+      applyAiPayload(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveProfile(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await mini<{ profile: AgentProfile }>("aiProfileUpdate", {
+        profile: profileDraft,
+      });
+      setProfile(data.profile);
+      setProfileDraft(data.profile);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addInstruction(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await mini("aiInstructionAdd", {
+        category: instructionCategory,
+        text: instructionText,
+      });
+      setInstructionText("");
+      await refreshAiTraining();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateInstruction(instruction: OwnerInstruction) {
+    setBusy(true);
+    setError(null);
+    try {
+      await mini("aiInstructionUpdate", {
+        instructionId: instruction.id,
+        patch: {
+          text: editingInstructionText,
+          category: instruction.category,
+        },
+      });
+      setEditingInstructionId(null);
+      setEditingInstructionText("");
+      await refreshAiTraining();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disableInstruction(instructionId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await mini("aiInstructionDisable", { instructionId });
+      await refreshAiTraining();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enableInstruction(instructionId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await mini("aiInstructionEnable", { instructionId });
+      await refreshAiTraining();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeInstruction(instructionId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await mini("aiInstructionRemove", { instructionId });
+      await refreshAiTraining();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openLink(link: string) {
     if (window.Telegram?.WebApp?.openTelegramLink) {
       window.Telegram.WebApp.openTelegramLink(link);
@@ -378,6 +578,45 @@ export function MiniApp() {
     status?.account?.firstName ||
     status?.botUser?.firstName ||
     "Telegram";
+
+  const currentQuestion =
+    training?.status === "in_progress"
+      ? training.text
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .at(-1)
+      : null;
+
+  const profileFields: Array<{
+    key: keyof AgentProfile;
+    label: string;
+    multiline?: boolean;
+  }> = [
+    { key: "aiDisplayName", label: "AI name" },
+    { key: "ownerName", label: "Owner name" },
+    { key: "businessOrProfession", label: "Business/profession" },
+    { key: "businessDescription", label: "Description", multiline: true },
+    { key: "aiPurpose", label: "Purpose", multiline: true },
+    { key: "preferredLanguages", label: "Languages" },
+    { key: "communicationTone", label: "Tone/style" },
+    { key: "productsServices", label: "Products/services", multiline: true },
+    { key: "allowedToShare", label: "Allowed information", multiline: true },
+    { key: "restrictedPrivateInfo", label: "Restricted information", multiline: true },
+    { key: "alwaysFollow", label: "Always-follow rules", multiline: true },
+    { key: "neverDo", label: "Never-do rules", multiline: true },
+  ];
+
+  function profileValue(key: keyof AgentProfile) {
+    const value = profileDraft[key] ?? "";
+    return Array.isArray(value) ? value.join(", ") : String(value);
+  }
+
+  function updateProfileDraft(key: keyof AgentProfile, value: string) {
+    setProfileDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  const activeInstructionCount = instructions.filter((instruction) => instruction.enabled).length;
 
   return (
     <main className="min-h-screen px-4 py-6">
@@ -477,8 +716,18 @@ export function MiniApp() {
         {stage === "app" ? (
           <div className="space-y-5">
             <section className="panel p-3">
-              <div className="grid grid-cols-3 gap-2">
-                {(["create", "history", "account"] as View[]).map((item) => (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {(
+                  [
+                    "dashboard",
+                    "train",
+                    "profile",
+                    "instructions",
+                    "create",
+                    "history",
+                    "account",
+                  ] as View[]
+                ).map((item) => (
                   <button
                     key={item}
                     type="button"
@@ -488,11 +737,19 @@ export function MiniApp() {
                       (view === item ? "bg-primary text-primary-foreground" : "bg-secondary")
                     }
                   >
-                    {item === "create"
-                      ? "Create Folder"
-                      : item === "history"
-                        ? "My Folders"
-                        : "Account"}
+                    {item === "dashboard"
+                      ? "AI Dashboard"
+                      : item === "train"
+                        ? "Train My AI"
+                        : item === "profile"
+                          ? "AI Profile"
+                          : item === "instructions"
+                            ? "AI Instructions"
+                            : item === "create"
+                              ? "Folder Tools"
+                              : item === "history"
+                                ? "Folder History"
+                                : "Connected Session"}
                   </button>
                 ))}
               </div>
@@ -500,45 +757,246 @@ export function MiniApp() {
 
             {view === "dashboard" ? (
               <section className="panel p-5">
-                <h2 className="text-base font-semibold">Dashboard</h2>
+                <h2 className="text-base font-semibold">AI Dashboard</h2>
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   <button
                     type="button"
-                    onClick={() => setView("create")}
+                    onClick={() => setView("train")}
                     className="rounded-md border border-border bg-secondary/40 p-4 text-left"
                   >
-                    <div className="font-medium">Create Folder</div>
+                    <div className="font-medium">Train My AI</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Analyze first, then join and create after confirmation.
+                      Resume onboarding and answer one setup question at a time.
                     </div>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setView("history")}
+                    onClick={() => setView("profile")}
                     className="rounded-md border border-border bg-secondary/40 p-4 text-left"
                   >
-                    <div className="font-medium">My Folders</div>
+                    <div className="font-medium">AI Profile</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Open or copy your saved shareable links.
+                      Edit business, language, tone, and sharing rules.
                     </div>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setView("account")}
+                    onClick={() => setView("instructions")}
                     className="rounded-md border border-border bg-secondary/40 p-4 text-left"
                   >
-                    <div className="font-medium">Telegram Account</div>
+                    <div className="font-medium">AI Instructions</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      View the account linked to this Telegram user.
+                      Add explicit owner instructions for local training.
                     </div>
                   </button>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <Stat label="Onboarding" value={profile?.onboardingStatus || "not started"} />
+                  <Stat label="Active instructions" value={activeInstructionCount} />
+                  <Stat label="Connected session" value={accountName} />
+                </div>
+              </section>
+            ) : null}
+
+            {view === "train" ? (
+              <section className="panel p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold">Train My AI</h2>
+                  <SecondaryButton disabled={busy} onClick={() => void refreshAiTraining()}>
+                    <RefreshCw className="size-4" />
+                  </SecondaryButton>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <Stat label="Status" value={training?.status || "not_started"} />
+                  <Stat label="Profile" value={profile?.onboardingStatus || "not_started"} />
+                  <Stat label="Instructions" value={instructions.length} />
+                </div>
+                <div className="mt-4 rounded-md border border-border bg-secondary/40 p-4">
+                  {currentQuestion ? (
+                    <div>
+                      <div className="text-xs text-muted-foreground">Current question</div>
+                      <div className="mt-1 text-sm font-medium">{currentQuestion}</div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">
+                      {training?.status === "completed"
+                        ? "Onboarding is complete. You can still edit the profile and instructions."
+                        : "Start onboarding to configure your Personal AI Representative."}
+                    </div>
+                  )}
+                </div>
+                <form onSubmit={submitTrainingAnswer} className="mt-4 space-y-3">
+                  <textarea
+                    value={trainingAnswer}
+                    onChange={(e) => setTrainingAnswer(e.target.value)}
+                    placeholder="Type your answer"
+                    rows={4}
+                    disabled={!currentQuestion}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <PrimaryButton
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void startTraining()}
+                    >
+                      {training?.status === "in_progress" ? "Resume" : "Start"}
+                    </PrimaryButton>
+                    <PrimaryButton
+                      type="submit"
+                      disabled={busy || !currentQuestion || !trainingAnswer.trim()}
+                    >
+                      Save Answer
+                    </PrimaryButton>
+                    <SecondaryButton disabled={busy} onClick={() => void cancelTraining()}>
+                      Cancel/Reset
+                    </SecondaryButton>
+                  </div>
+                </form>
+              </section>
+            ) : null}
+
+            {view === "profile" ? (
+              <section className="panel p-5">
+                <h2 className="text-base font-semibold">AI Profile</h2>
+                <form onSubmit={saveProfile} className="mt-4 space-y-4">
+                  {profileFields.map((field) => (
+                    <label key={field.key} className="block text-sm">
+                      <span className="font-medium">{field.label}</span>
+                      {field.multiline ? (
+                        <textarea
+                          value={profileValue(field.key)}
+                          onChange={(e) => updateProfileDraft(field.key, e.target.value)}
+                          rows={3}
+                          className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                        />
+                      ) : (
+                        <input
+                          value={profileValue(field.key)}
+                          onChange={(e) => updateProfileDraft(field.key, e.target.value)}
+                          className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                        />
+                      )}
+                    </label>
+                  ))}
+                  <PrimaryButton type="submit" disabled={busy}>
+                    Save Profile
+                  </PrimaryButton>
+                </form>
+              </section>
+            ) : null}
+
+            {view === "instructions" ? (
+              <section className="panel p-5">
+                <h2 className="text-base font-semibold">AI Instructions</h2>
+                <form onSubmit={addInstruction} className="mt-4 space-y-3">
+                  <select
+                    value={instructionCategory}
+                    onChange={(e) => setInstructionCategory(e.target.value)}
+                    className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    {[
+                      "communication",
+                      "business_rule",
+                      "privacy",
+                      "sales",
+                      "support",
+                      "custom",
+                    ].map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                  <textarea
+                    value={instructionText}
+                    onChange={(e) => setInstructionText(e.target.value)}
+                    placeholder="Example: Always answer me in Hindi."
+                    rows={3}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <PrimaryButton type="submit" disabled={busy || !instructionText.trim()}>
+                    Add Instruction
+                  </PrimaryButton>
+                </form>
+
+                <div className="mt-5 space-y-3">
+                  {instructions.map((instruction) => (
+                    <div
+                      key={instruction.id}
+                      className="rounded-md border border-border p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs text-muted-foreground">
+                          {instruction.category} - {instruction.enabled ? "active" : "disabled"}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <SecondaryButton
+                            disabled={busy}
+                            onClick={() => {
+                              setEditingInstructionId(instruction.id);
+                              setEditingInstructionText(instruction.text);
+                            }}
+                          >
+                            Edit
+                          </SecondaryButton>
+                          <SecondaryButton
+                            disabled={busy}
+                            onClick={() => void disableInstruction(instruction.id)}
+                          >
+                            Disable
+                          </SecondaryButton>
+                          {!instruction.enabled ? (
+                            <SecondaryButton
+                              disabled={busy}
+                              onClick={() => void enableInstruction(instruction.id)}
+                            >
+                              Enable
+                            </SecondaryButton>
+                          ) : null}
+                          <SecondaryButton
+                            disabled={busy}
+                            onClick={() => void removeInstruction(instruction.id)}
+                          >
+                            Remove
+                          </SecondaryButton>
+                        </div>
+                      </div>
+                      {editingInstructionId === instruction.id ? (
+                        <div className="mt-3 space-y-2">
+                          <textarea
+                            value={editingInstructionText}
+                            onChange={(e) => setEditingInstructionText(e.target.value)}
+                            rows={3}
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                          />
+                          <PrimaryButton
+                            disabled={busy || !editingInstructionText.trim()}
+                            onClick={() => void updateInstruction(instruction)}
+                          >
+                            Save
+                          </PrimaryButton>
+                        </div>
+                      ) : (
+                        <div className="mt-2">{instruction.text}</div>
+                      )}
+                    </div>
+                  ))}
+                  {instructions.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No active owner instructions yet.
+                    </p>
+                  ) : null}
                 </div>
               </section>
             ) : null}
 
             {view === "create" ? (
               <section className="panel p-5">
-                <h2 className="text-base font-semibold">Analyze Folder Links</h2>
+                <h2 className="text-base font-semibold">Legacy Folder Tools</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Existing folder-merger workflow is preserved here.
+                </p>
                 <form onSubmit={analyze} className="mt-4 space-y-3">
                   <textarea
                     value={links}

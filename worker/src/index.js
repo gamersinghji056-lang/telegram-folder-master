@@ -16,6 +16,7 @@ import {
 import { startBot, restartBot, botUsername, botError, isLocalDevMode } from "./bot.js";
 import { analyzeFolders, joinAndCreateFolder } from "./process.js";
 import { requireMiniUser } from "./mini-auth.js";
+import { miniTrainingHandlers } from "./mini-training-api.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKER_TOKEN = process.env.WORKER_TOKEN || "";
@@ -184,6 +185,7 @@ const handlers = {
       bot_user_id: mini.botUserId,
     });
   },
+  ...miniTrainingHandlers,
 };
 
 function json(res, code, body) {
@@ -448,7 +450,21 @@ async function handlePublicMiniApi(req, res) {
     "signIn",
     "checkPassword",
     "cancelLogin",
+    "analyzeFolders",
+    "joinAndCreate",
     "history",
+    "aiTrainingStatus",
+    "aiTrainingStart",
+    "aiTrainingAnswer",
+    "aiTrainingCancel",
+    "aiProfileGet",
+    "aiProfileUpdate",
+    "aiInstructionsList",
+    "aiInstructionAdd",
+    "aiInstructionUpdate",
+    "aiInstructionDisable",
+    "aiInstructionEnable",
+    "aiInstructionRemove",
   ]);
 
   let parsed;
