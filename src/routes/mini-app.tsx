@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { miniStatusAllowsApp } from "../lib/mini-app-stage.js";
+
 type TelegramWebApp = {
   initData: string;
   ready: () => void;
@@ -298,8 +300,10 @@ export function MiniApp() {
       try {
         const next = await mini<MiniStatus>("status");
         setStatus(next);
-        setStage(next.connected ? "app" : "phone");
-        if (next.connected) {
+        const allowedIntoApp = miniStatusAllowsApp(next);
+        setStage(allowedIntoApp ? "app" : "phone");
+        if (allowedIntoApp) {
+          setView("dashboard");
           const saved = await mini<{ folders: HistoryFolder[] }>("history").catch(() => ({
             folders: [],
           }));
