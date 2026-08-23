@@ -10,6 +10,30 @@ export let botUsername = null;
 export let botId = null;
 export let botError = null;
 
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(
+    String(value || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+export function isLocalDevMode(env = process.env) {
+  return truthy(env.LOCAL_DEV_MODE);
+}
+
+export function resolveBotRuntimeConfig({ env = process.env, telegramState = state } = {}) {
+  const localDevMode = isLocalDevMode(env);
+  const devBotToken = String(env.DEV_TELEGRAM_BOT_TOKEN || "").trim();
+  const botToken = localDevMode && devBotToken ? devBotToken : telegramState.botToken;
+
+  return {
+    botToken,
+    localDevMode: Boolean(localDevMode && devBotToken),
+    shouldSaveBotUsername: !(localDevMode && devBotToken),
+  };
+}
+
 function cleanBaseUrl(value) {
   const raw = String(value || "")
     .trim()
@@ -308,19 +332,23 @@ export async function startBot() {
   }
 
   stopped = false;
-  if (!state.botToken) {
+  const runtime = resolveBotRuntimeConfig();
+
+  if (!runtime.botToken) {
     botError = "Bot token not configured.";
     return;
   }
 
-  call = botApi(state.botToken);
+  call = botApi(runtime.botToken);
   try {
     const me = await call("getMe");
     botUsername = me.username;
     botId = Number(me.id) || null;
     botError = null;
     await call("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
-    await api("saveConfig", { bot_username: botUsername }).catch(() => {});
+    if (runtime.shouldSaveBotUsername) {
+      await api("saveConfig", { bot_username: botUsername }).catch(() => {});
+    }
   } catch (e) {
     botError = e.message;
     call = null;

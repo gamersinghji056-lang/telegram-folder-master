@@ -14,7 +14,7 @@ import {
   getMe,
   isUserConnected,
 } from "./tg.js";
-import { startBot, restartBot, botUsername, botError } from "./bot.js";
+import { startBot, restartBot, botUsername, botError, isLocalDevMode } from "./bot.js";
 import { analyzeFolders, joinAndCreateFolder } from "./process.js";
 
 const PORT = Number(process.env.PORT || 8080);
@@ -34,6 +34,8 @@ function statusPayload() {
 }
 
 async function pushStatus(lastError = null) {
+  if (isLocalDevMode()) return;
+
   try {
     const s = statusPayload();
     await api("setStatus", {
@@ -594,11 +596,13 @@ async function init() {
     console.error("could not load config:", e.message);
   }
   await startBot();
-  await pushStatus();
+  if (!isLocalDevMode()) {
+    await pushStatus();
 
-  setInterval(() => {
-    api("heartbeat").catch(() => {});
-  }, 60_000);
+    setInterval(() => {
+      api("heartbeat").catch(() => {});
+    }, 60_000);
+  }
 }
 
 // Bind to 0.0.0.0 on the platform-provided PORT *before* any slow init work,
