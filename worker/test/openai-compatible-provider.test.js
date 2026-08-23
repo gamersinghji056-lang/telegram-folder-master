@@ -164,7 +164,16 @@ test("OpenAI-compatible provider surfaces provider HTTP errors to orchestrator",
       }),
   });
 
-  await assert.rejects(() => provider.complete(request()), /model failed/);
+  await assert.rejects(
+    () => provider.complete(request()),
+    (error) => {
+      assert.match(error.message, /model failed/);
+      assert.equal(error.providerCode, "http_error");
+      assert.equal(error.httpStatus, 500);
+      assert.equal(error.providerDetail, "model failed");
+      return true;
+    },
+  );
 });
 
 test("OpenAI-compatible provider handles timeout", async () => {
@@ -182,7 +191,16 @@ test("OpenAI-compatible provider handles timeout", async () => {
       }),
   });
 
-  await assert.rejects(() => provider.complete(request()), /timed out/);
+  await assert.rejects(
+    () => provider.complete(request()),
+    (error) => {
+      assert.match(error.message, /timed out/);
+      assert.equal(error.providerCode, "timeout");
+      assert.equal(error.httpStatus, null);
+      assert.match(error.providerDetail, /exceeded 1ms timeout/);
+      return true;
+    },
+  );
 });
 
 test("OpenAI-compatible provider rejects invalid non-JSON response", async () => {
@@ -192,7 +210,16 @@ test("OpenAI-compatible provider rejects invalid non-JSON response", async () =>
     fetchImpl: async () => response({ body: "not-json" }),
   });
 
-  await assert.rejects(() => provider.complete(request()), /non-JSON/);
+  await assert.rejects(
+    () => provider.complete(request()),
+    (error) => {
+      assert.match(error.message, /non-JSON/);
+      assert.equal(error.providerCode, "non_json_response");
+      assert.equal(error.httpStatus, 200);
+      assert.equal(error.providerDetail, "Provider returned a non-JSON response body.");
+      return true;
+    },
+  );
 });
 
 test("OpenAI-compatible provider rejects missing base URL", async () => {

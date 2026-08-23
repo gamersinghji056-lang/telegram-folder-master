@@ -20,6 +20,17 @@ function firstMessage(data) {
   return String(choice?.message?.content || choice?.text || "");
 }
 
+function providerError(
+  message,
+  { code = "provider_error", httpStatus = null, detail = null } = {},
+) {
+  const error = new Error(message);
+  error.providerCode = code;
+  error.httpStatus = httpStatus;
+  error.providerDetail = detail || message;
+  return error;
+}
+
 function providerConfigFromRequest(request, defaults) {
   const config = request?.config?.provider || request?.config || {};
   const role = request?.model?.role || "general";
@@ -64,11 +75,15 @@ export class OpenAiCompatibleProvider extends BaseAiProvider {
     const url = chatCompletionsUrl(config.baseUrl);
 
     if (!url) {
-      throw new Error("AI_BASE_URL is required for the OpenAI-compatible provider.");
+      throw providerError("AI_BASE_URL is required for the OpenAI-compatible provider.", {
+        code: "config_error",
+      });
     }
 
     if (!config.model) {
-      throw new Error("AI model name is required for the OpenAI-compatible provider.");
+      throw providerError("AI model name is required for the OpenAI-compatible provider.", {
+        code: "config_error",
+      });
     }
 
     const controller = new AbortController();
@@ -111,21 +126,32 @@ export class OpenAiCompatibleProvider extends BaseAiProvider {
       try {
         data = text ? JSON.parse(text) : null;
       } catch {
-        throw new Error(`OpenAI-compatible provider returned non-JSON (HTTP ${res.status}).`);
+        throw providerError(`OpenAI-compatible provider returned non-JSON (HTTP ${res.status}).`, {
+          code: "non_json_response",
+          httpStatus: res.status,
+          detail: "Provider returned a non-JSON response body.",
+        });
       }
 
       if (!res.ok) {
-        throw new Error(
+        const message =
           data?.error?.message ||
-            data?.message ||
-            `OpenAI-compatible provider failed (HTTP ${res.status}).`,
-        );
+          data?.message ||
+          `OpenAI-compatible provider failed (HTTP ${res.status}).`;
+
+        throw providerError(message, {
+          code: "http_error",
+          httpStatus: res.status,
+          detail: message,
+        });
       }
 
       const message = firstMessage(data);
 
       if (!message) {
-        throw new Error("OpenAI-compatible provider returned an empty message.");
+        throw providerError("OpenAI-compatible provider returned an empty message.", {
+          code: "empty_message",
+        });
       }
 
       return createAiResponse({
@@ -142,7 +168,10 @@ export class OpenAiCompatibleProvider extends BaseAiProvider {
       });
     } catch (e) {
       if (e?.name === "AbortError") {
-        throw new Error("OpenAI-compatible provider timed out.");
+        throw providerError("OpenAI-compatible provider timed out.", {
+          code: "timeout",
+          detail: `Provider request exceeded ${config.timeoutMs}ms timeout.`,
+        });
       }
 
       throw e;

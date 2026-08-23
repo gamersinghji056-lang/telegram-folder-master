@@ -25,6 +25,26 @@ function logLocalDevAiTiming({ env, logger, role, model, providerMs, totalMs }) 
   );
 }
 
+function safeDiagnosticText(value) {
+  return String(value || "unknown")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+
+function logLocalDevAiProviderError({ env, logger, role, model, error }) {
+  if (!isLocalDevMode(env)) return;
+
+  const code = safeDiagnosticText(error?.providerCode || error?.code || error?.name || "error");
+  const status = error?.httpStatus == null ? "none" : safeDiagnosticText(error.httpStatus);
+  const detail = safeDiagnosticText(error?.providerDetail || error?.message);
+
+  logger.error?.(
+    `[AI_ERROR] role=${role} model=${model || "unknown"} code=${code} status=${status} detail=${detail}`,
+  );
+}
+
 export function createAiOrchestrator({
   router = modelRouter,
   env = process.env,
@@ -90,13 +110,21 @@ export function createAiOrchestrator({
         });
       } catch (e) {
         const totalMs = Math.max(0, Math.round(clock() - totalStart));
+        const modelName = provider.modelNameForRequest?.(routedRequest) ?? null;
         logLocalDevAiTiming({
           env,
           logger,
           role: modelRole,
-          model: provider.modelNameForRequest?.(routedRequest) ?? null,
+          model: modelName,
           providerMs: totalMs,
           totalMs,
+        });
+        logLocalDevAiProviderError({
+          env,
+          logger,
+          role: modelRole,
+          model: modelName,
+          error: e,
         });
 
         return createAiErrorResponse({

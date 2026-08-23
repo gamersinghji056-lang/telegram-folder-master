@@ -136,6 +136,125 @@ test("provider failure is handled safely", async () => {
   assert.doesNotMatch(result.text, /provider secret failure/);
 });
 
+test("local dev logs provider diagnostic details without changing user-facing error", async () => {
+  const broken = createStubProvider({
+    id: "broken",
+    roles: ["fast"],
+    complete: async () => {
+      const error = new Error("model llama3.2:3b not found");
+      error.providerCode = "http_error";
+      error.httpStatus = 404;
+      error.providerDetail = "model llama3.2:3b not found";
+      throw error;
+    },
+  });
+  broken.provider.modelNameForRequest = () => "llama3.2:3b";
+
+  const registry = createModelRegistry();
+  registry.registerModelProvider(broken.provider);
+  const router = createModelRouter({
+    registry,
+    roleProviders: {
+      fast: "broken",
+    },
+  });
+  const logs = [];
+  const errors = [];
+  const orchestrator = createAiOrchestrator({
+    router,
+    env: {
+      LOCAL_DEV_MODE: "true",
+    },
+    logger: {
+      log: (message) => logs.push(message),
+      error: (message) => errors.push(message),
+    },
+  });
+
+  const result = await orchestrator.runAiTurn({
+    id: "diag-test",
+    model: { role: "general" },
+    input: {
+      text: "hello",
+      chat: { id: 1, type: "private" },
+    },
+    context: {},
+    metadata: {},
+    source: "telegram",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "ai_provider_failed");
+  assert.equal(
+    result.message,
+    "Personal AI Representative could not complete that request safely.",
+  );
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^\[AI\] role=fast model=llama3\.2:3b provider_ms=\d+ total_ms=\d+$/);
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /^\[AI_ERROR\] role=fast model=llama3\.2:3b code=http_error status=404 detail=model llama3\.2:3b not found$/,
+  );
+  assert.doesNotMatch(errors[0], /hello/);
+});
+
+test("production does not log provider diagnostic details or expose them", async () => {
+  const broken = createStubProvider({
+    id: "broken",
+    roles: ["general"],
+    complete: async () => {
+      const error = new Error("provider secret failure with sk-test-token");
+      error.providerCode = "http_error";
+      error.httpStatus = 500;
+      error.providerDetail = "provider secret failure with sk-test-token";
+      throw error;
+    },
+  });
+  broken.provider.modelNameForRequest = () => "general-model";
+
+  const registry = createModelRegistry();
+  registry.registerModelProvider(broken.provider);
+  const router = createModelRouter({
+    registry,
+    roleProviders: {
+      general: "broken",
+    },
+  });
+  const logs = [];
+  const errors = [];
+  const orchestrator = createAiOrchestrator({
+    router,
+    env: {},
+    logger: {
+      log: (message) => logs.push(message),
+      error: (message) => errors.push(message),
+    },
+  });
+
+  const result = await orchestrator.runAiTurn({
+    id: "prod-diag-test",
+    model: { role: "general" },
+    input: {
+      text: "write a short reply",
+      chat: { id: 1, type: "private" },
+    },
+    context: {},
+    metadata: {},
+    source: "telegram",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "ai_provider_failed");
+  assert.equal(
+    result.message,
+    "Personal AI Representative could not complete that request safely.",
+  );
+  assert.doesNotMatch(result.message, /sk-test-token/);
+  assert.deepEqual(logs, []);
+  assert.deepEqual(errors, []);
+});
+
 test("latency instrumentation preserves the AI response shape and message", async () => {
   const { provider } = createStubProvider({
     complete: async (request) => ({
