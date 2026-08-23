@@ -88,6 +88,7 @@ test("AI provider config still activates role routing", () => {
       general: "openai-compatible",
       reasoning: "openai-compatible",
       coding: "openai-compatible",
+      embedding: "openai-compatible",
     },
   );
 });

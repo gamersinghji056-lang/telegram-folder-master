@@ -110,6 +110,49 @@ test("OpenAI-compatible provider allows request config to override base URL and 
   assert.equal(JSON.parse(calls[0].init.body).model, "override-model");
 });
 
+test("OpenAI-compatible provider uses role-specific model configuration", async () => {
+  const calls = [];
+  const provider = new OpenAiCompatibleProvider({
+    baseUrl: "http://localhost:11434/v1",
+    model: "fallback-model",
+    roleModels: {
+      general: "general-model",
+      coding: "qwen2.5-coder:3b",
+    },
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return response({
+        body: JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+      });
+    },
+  });
+
+  await provider.complete(request({ role: "coding" }));
+
+  assert.equal(provider.modelNameForRequest(request({ role: "coding" })), "qwen2.5-coder:3b");
+  assert.equal(JSON.parse(calls[0].init.body).model, "qwen2.5-coder:3b");
+});
+
+test("configured provider supports role-specific models with AI_MODEL fallback", () => {
+  const registry = createModelRegistry();
+  const registered = registerConfiguredModelProviders({
+    env: {
+      AI_BASE_URL: "http://localhost:11434/v1",
+      AI_MODEL: "fallback-model",
+      AI_MODEL_GENERAL: "general-model",
+      AI_MODEL_CODING: "qwen2.5-coder:3b",
+    },
+    registry,
+    fetchImpl: async () => response({ body: "{}" }),
+  });
+
+  const provider = registered[0];
+
+  assert.equal(provider.modelNameForRequest(request({ role: "fast" })), "fallback-model");
+  assert.equal(provider.modelNameForRequest(request({ role: "general" })), "general-model");
+  assert.equal(provider.modelNameForRequest(request({ role: "coding" })), "qwen2.5-coder:3b");
+});
+
 test("OpenAI-compatible provider surfaces provider HTTP errors to orchestrator", async () => {
   const provider = new OpenAiCompatibleProvider({
     baseUrl: "http://localhost:11434/v1",
@@ -218,6 +261,7 @@ test("configured role providers are only active when base URL and model are conf
       general: "openai-compatible",
       reasoning: "openai-compatible",
       coding: "openai-compatible",
+      embedding: "openai-compatible",
     },
   );
 });

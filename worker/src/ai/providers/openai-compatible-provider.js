@@ -22,11 +22,14 @@ function firstMessage(data) {
 
 function providerConfigFromRequest(request, defaults) {
   const config = request?.config?.provider || request?.config || {};
+  const role = request?.model?.role || "general";
+  const roleModels = config.roleModels || defaults.roleModels || {};
+  const roleModel = roleModels[role] || null;
 
   return {
     baseUrl: config.AI_BASE_URL || config.baseUrl || defaults.baseUrl,
     apiKey: config.AI_API_KEY || config.apiKey || defaults.apiKey,
-    model: request?.model?.name || config.model || defaults.model,
+    model: request?.model?.name || config.model || roleModel || defaults.model,
     timeoutMs: Number(config.timeoutMs || defaults.timeoutMs || DEFAULT_TIMEOUT_MS),
   };
 }
@@ -35,10 +38,11 @@ export class OpenAiCompatibleProvider extends BaseAiProvider {
   constructor({
     id = "openai-compatible",
     name = "OpenAI-Compatible HTTP Provider",
-    roles = ["fast", "general", "reasoning", "coding"],
+    roles = ["fast", "general", "reasoning", "coding", "embedding"],
     baseUrl = null,
     apiKey = null,
     model = null,
+    roleModels = {},
     timeoutMs = DEFAULT_TIMEOUT_MS,
     fetchImpl = fetch,
   } = {}) {
@@ -46,8 +50,13 @@ export class OpenAiCompatibleProvider extends BaseAiProvider {
     this.baseUrl = baseUrl;
     this.apiKey = apiKey;
     this.model = model;
+    this.roleModels = roleModels;
     this.timeoutMs = timeoutMs;
     this.fetchImpl = fetchImpl;
+  }
+
+  modelNameForRequest(request) {
+    return providerConfigFromRequest(request, this).model || null;
   }
 
   async complete(request) {

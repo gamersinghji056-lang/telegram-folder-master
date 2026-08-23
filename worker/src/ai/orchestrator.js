@@ -1,11 +1,48 @@
 import { modelRouter } from "./model-router.js";
 import { createAiErrorResponse, createAiResponse, DEFAULT_MODEL_ROLE } from "./contract.js";
 
-export function createAiOrchestrator({ router = modelRouter } = {}) {
+function nowMs() {
+  return Number(process.hrtime.bigint() / 1_000_000n);
+}
+
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(
+    String(value || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function isLocalDevMode(env = process.env) {
+  return truthy(env.LOCAL_DEV_MODE);
+}
+
+function logLocalDevAiTiming({ env, logger, role, model, providerMs, totalMs }) {
+  if (!isLocalDevMode(env)) return;
+
+  logger.log?.(
+    `[AI] role=${role} model=${model || "unknown"} provider_ms=${providerMs} total_ms=${totalMs}`,
+  );
+}
+
+export function createAiOrchestrator({
+  router = modelRouter,
+  env = process.env,
+  logger = console,
+  clock = nowMs,
+} = {}) {
   return {
     async runAiTurn(request) {
+      const totalStart = clock();
       const modelRole =
         router.selectModelRole?.(request) || request.model?.role || DEFAULT_MODEL_ROLE;
+      const routedRequest = {
+        ...request,
+        model: {
+          ...(request.model || {}),
+          role: modelRole,
+        },
+      };
       const provider = router.selectProvider(request);
 
       if (!provider) {
@@ -18,7 +55,21 @@ export function createAiOrchestrator({ router = modelRouter } = {}) {
       }
 
       try {
-        const result = await provider.complete(request);
+        const selectedModel = provider.modelNameForRequest?.(routedRequest) ?? null;
+        const providerStart = clock();
+        const result = await provider.complete(routedRequest);
+        const providerMs = Math.max(0, Math.round(clock() - providerStart));
+        const totalMs = Math.max(0, Math.round(clock() - totalStart));
+        const modelName = result?.output?.model || selectedModel;
+
+        logLocalDevAiTiming({
+          env,
+          logger,
+          role: modelRole,
+          model: modelName,
+          providerMs,
+          totalMs,
+        });
 
         return createAiResponse({
           requestId: request.id,
@@ -27,9 +78,27 @@ export function createAiOrchestrator({ router = modelRouter } = {}) {
           message: result?.message || result?.text || "",
           modelRole,
           providerId: provider.id,
-          output: result?.output || {},
+          output: {
+            ...(result?.output || {}),
+            telemetry: {
+              providerMs,
+              totalMs,
+              modelRole,
+              model: modelName ?? null,
+            },
+          },
         });
       } catch (e) {
+        const totalMs = Math.max(0, Math.round(clock() - totalStart));
+        logLocalDevAiTiming({
+          env,
+          logger,
+          role: modelRole,
+          model: provider.modelNameForRequest?.(routedRequest) ?? null,
+          providerMs: totalMs,
+          totalMs,
+        });
+
         return createAiErrorResponse({
           requestId: request.id,
           code: "ai_provider_failed",

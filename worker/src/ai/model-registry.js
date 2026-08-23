@@ -44,9 +44,17 @@ export function registerConfiguredModelProviders({
   fetchImpl,
 } = {}) {
   const baseUrl = String(env.AI_BASE_URL || "").trim();
-  const model = String(env.AI_MODEL || "").trim();
+  const fallbackModel = String(env.AI_MODEL || "").trim();
+  const roleModels = {
+    fast: String(env.AI_MODEL_FAST || fallbackModel).trim(),
+    general: String(env.AI_MODEL_GENERAL || fallbackModel).trim(),
+    reasoning: String(env.AI_MODEL_REASONING || fallbackModel).trim(),
+    coding: String(env.AI_MODEL_CODING || fallbackModel).trim(),
+    embedding: String(env.AI_MODEL_EMBEDDING || fallbackModel).trim(),
+  };
+  const model = roleModels.general || fallbackModel;
 
-  if (!baseUrl || !model) {
+  if (!baseUrl || !Object.values(roleModels).some(Boolean)) {
     return [];
   }
 
@@ -54,6 +62,7 @@ export function registerConfiguredModelProviders({
     baseUrl,
     apiKey: env.AI_API_KEY || null,
     model,
+    roleModels,
     fetchImpl,
   });
 
