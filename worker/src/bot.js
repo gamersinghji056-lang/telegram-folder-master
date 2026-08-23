@@ -45,20 +45,34 @@ function cleanBaseUrl(value) {
   return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
 }
 
-function defaultMiniAppUrl() {
+function defaultMiniAppUrl(env = process.env) {
   const workerBase = cleanBaseUrl(
-    process.env.MINI_APP_BASE_URL ||
-      process.env.PUBLIC_URL ||
-      process.env.RAILWAY_PUBLIC_DOMAIN ||
-      process.env.RAILWAY_STATIC_URL ||
+    env.MINI_APP_BASE_URL ||
+      env.PUBLIC_URL ||
+      env.RAILWAY_PUBLIC_DOMAIN ||
+      env.RAILWAY_STATIC_URL ||
       "telegram-folder-master-production.up.railway.app",
   );
-  const appBase = cleanBaseUrl(process.env.APP_URL);
+  const appBase = cleanBaseUrl(env.APP_URL);
   const base = workerBase || appBase;
   return base ? `${base}/mini-app` : "";
 }
 
-const MINI_APP_URL = cleanBaseUrl(process.env.MINI_APP_URL) || defaultMiniAppUrl();
+export function resolveMiniAppUrl({ env = process.env } = {}) {
+  const explicit = cleanBaseUrl(env.MINI_APP_URL);
+  if (explicit) return explicit;
+  if (isLocalDevMode(env)) return "";
+  return defaultMiniAppUrl(env);
+}
+
+export function miniAppUrlMissingMessage({ env = process.env } = {}) {
+  if (isLocalDevMode(env)) {
+    return "Local dev Mini App URL is not configured. Set MINI_APP_URL to your HTTPS tunnel URL, for example https://your-tunnel.example/mini-app.";
+  }
+  return "Mini App URL is not configured. Set APP_URL or MINI_APP_URL on the worker.";
+}
+
+const MINI_APP_URL = resolveMiniAppUrl();
 
 const BASE_HELP = [
   "Telegram Folder Merger",
@@ -114,11 +128,7 @@ async function send(chatId, text, extra = {}) {
 
 async function sendMiniApp(chatId, text = "Open the Mini App to continue.", extra = {}) {
   if (!MINI_APP_URL) {
-    await send(
-      chatId,
-      "Mini App URL is not configured. Set APP_URL or MINI_APP_URL on the worker.",
-      extra,
-    );
+    await send(chatId, miniAppUrlMissingMessage(), extra);
     return;
   }
 
@@ -469,6 +479,9 @@ export async function startBot() {
   }
 
   stopped = false;
+  if (isLocalDevMode()) {
+    console.log(`[DEV] Mini App URL: ${MINI_APP_URL || "not configured"}`);
+  }
   const runtime = resolveBotRuntimeConfig();
 
   if (!runtime.botToken) {
