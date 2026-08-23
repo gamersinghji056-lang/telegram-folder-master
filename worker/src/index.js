@@ -1,5 +1,4 @@
 import http from "node:http";
-import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { api } from "./api.js";
 import {
@@ -16,11 +15,10 @@ import {
 } from "./tg.js";
 import { startBot, restartBot, botUsername, botError, isLocalDevMode } from "./bot.js";
 import { analyzeFolders, joinAndCreateFolder } from "./process.js";
+import { requireMiniUser } from "./mini-auth.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKER_TOKEN = process.env.WORKER_TOKEN || "";
-const INITDATA_MAX_AGE_SECONDS = Number(process.env.MINI_APP_INITDATA_MAX_AGE_SECONDS || 86400);
-
 function statusPayload() {
   return {
     running: true,
@@ -84,66 +82,6 @@ async function selfTest() {
 
   await pushStatus(checks.find((c) => !c.ok)?.detail ?? null);
   return { ok: checks.every((c) => c.ok), checks, status: statusPayload() };
-}
-
-function timingSafeHexEqual(left, right) {
-  const a = Buffer.from(String(left || ""), "hex");
-  const b = Buffer.from(String(right || ""), "hex");
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function checkInitDataHash(params, hash, excludeSignature) {
-  const pairs = Array.from(params.entries())
-    .filter(([key]) => key !== "hash" && (!excludeSignature || key !== "signature"))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-
-  const secret = createHmac("sha256", "WebAppData").update(state.botToken).digest();
-  const expected = createHmac("sha256", secret).update(pairs).digest("hex");
-
-  return timingSafeHexEqual(expected, hash);
-}
-
-function requireMiniUser(initData) {
-  if (!state.botToken) throw new Error("Telegram bot token is not configured.");
-
-  const raw = String(initData || "");
-  if (!raw) throw new Error("Telegram Mini App initData is missing.");
-
-  const params = new URLSearchParams(raw);
-  const hash = params.get("hash");
-  if (!hash) throw new Error("Telegram Mini App initData hash is missing.");
-
-  const valid = checkInitDataHash(params, hash, false) || checkInitDataHash(params, hash, true);
-  if (!valid) throw new Error("Telegram Mini App initData validation failed.");
-
-  const authDate = Number(params.get("auth_date") || 0);
-  if (!authDate || Math.floor(Date.now() / 1000) - authDate > INITDATA_MAX_AGE_SECONDS) {
-    throw new Error("Telegram Mini App session expired. Reopen the bot app.");
-  }
-
-  let user;
-  try {
-    user = JSON.parse(params.get("user") || "{}");
-  } catch {
-    throw new Error("Telegram Mini App user data is invalid.");
-  }
-
-  const botUserId = Number(user?.id);
-  if (!Number.isSafeInteger(botUserId) || botUserId <= 0) {
-    throw new Error("Telegram Mini App user ID is invalid.");
-  }
-
-  return {
-    botUserId,
-    user: {
-      id: botUserId,
-      username: user.username || null,
-      firstName: user.first_name || null,
-      lastName: user.last_name || null,
-    },
-  };
 }
 
 async function miniStatus(payload) {
