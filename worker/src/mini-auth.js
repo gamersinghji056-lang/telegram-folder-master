@@ -5,8 +5,34 @@ import { state } from "./tg.js";
 
 const DEFAULT_INITDATA_MAX_AGE_SECONDS = 86400;
 
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(
+    String(value || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function normalizeDevTelegramUserId(value) {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 export function miniAppValidationBotToken({ env = process.env, telegramState = state } = {}) {
   return resolveBotRuntimeConfig({ env, telegramState }).botToken;
+}
+
+export function localDevMiniAppBypassConfig(env = process.env) {
+  const localDevMode = truthy(env.LOCAL_DEV_MODE);
+  const bypassAllowed = truthy(env.LOCAL_DEV_ALLOW_SESSION_BYPASS);
+  const devTelegramUserId = normalizeDevTelegramUserId(env.DEV_TELEGRAM_USER_ID);
+
+  return {
+    enabled: Boolean(localDevMode && bypassAllowed && devTelegramUserId),
+    localDevMode,
+    bypassAllowed,
+    devTelegramUserId,
+  };
 }
 
 function timingSafeHexEqual(left, right) {
@@ -80,4 +106,25 @@ export function requireMiniUser(
       lastName: user.last_name || null,
     },
   };
+}
+
+export function requireMiniUserOrLocalDevBypass(initData, options = {}) {
+  try {
+    return requireMiniUser(initData, options);
+  } catch (error) {
+    const config = localDevMiniAppBypassConfig(options.env ?? process.env);
+    if (!config.enabled) throw error;
+
+    return {
+      botUserId: config.devTelegramUserId,
+      localDevMiniAppBypass: true,
+      testOnly: true,
+      user: {
+        id: config.devTelegramUserId,
+        username: "local_dev_bypass",
+        firstName: "Local Dev",
+        lastName: null,
+      },
+    };
+  }
 }

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { createLinkedSessionGuard } from "../src/auth/linked-session.js";
 import { createCustomerAiContextBuilder } from "../src/agents/context-builder.js";
 import {
   createAgentProfileService,
@@ -16,6 +18,7 @@ import {
 } from "../src/agents/onboarding-service.js";
 import { createTrainingService } from "../src/agents/training-service.js";
 import { createMiniTrainingHandlers } from "../src/mini-training-api.js";
+import { requireMiniUserOrLocalDevBypass } from "../src/mini-auth.js";
 
 const AGENT_ID = "personal-representative";
 
@@ -198,4 +201,67 @@ test("Mini App training data never crosses Telegram users", async () => {
   assert.match(contextA.instructions, /Always answer me in Hindi/);
   assert.doesNotMatch(contextB.instructions, /ABC Payments/);
   assert.doesNotMatch(contextB.instructions, /Always answer me in Hindi/);
+});
+
+test("explicit local dev bypass allows Mini App AI dashboard testing", async () => {
+  const { profileService, instructionService, trainingService } = (() => {
+    const profileService = createAgentProfileService({
+      repository: createInMemoryAgentProfileRepository(),
+    });
+    const instructionService = createOwnerInstructionService({
+      repository: createInMemoryOwnerInstructionRepository(),
+    });
+    const onboardingService = createOnboardingService({
+      repository: createInMemoryOnboardingRepository(),
+      profileService,
+    });
+    return {
+      profileService,
+      instructionService,
+      trainingService: createTrainingService({
+        onboardingService,
+        instructionService,
+        defaultAgentId: AGENT_ID,
+      }),
+    };
+  })();
+  const env = {
+    LOCAL_DEV_MODE: "true",
+    LOCAL_DEV_ALLOW_SESSION_BYPASS: "true",
+    DEV_TELEGRAM_USER_ID: "4242",
+  };
+  const requireSession = createLinkedSessionGuard({
+    env,
+    logger: { warn: () => {} },
+    getClient: async () => {
+      throw new Error("real session lookup should not run");
+    },
+  });
+  const handlers = createMiniTrainingHandlers({
+    profileService,
+    instructionService,
+    trainingService,
+    defaultAgentId: AGENT_ID,
+    verifyMiniUser: (initData) =>
+      requireMiniUserOrLocalDevBypass(initData, {
+        env,
+        telegramState: { botToken: "prod-token" },
+      }),
+    requireSession,
+  });
+
+  const status = await handlers.miniAiTrainingStatus({ initData: "" });
+  const started = await handlers.miniAiTrainingStart({ initData: "" });
+
+  assert.equal(status.botUser.id, 4242);
+  assert.equal(status.profile.ownerId, "4242");
+  assert.match(started.result.text, /Personal AI Representative/);
+});
+
+test("Connected Session section and dev bypass badge remain in Mini App UI", async () => {
+  const source = await readFile(new URL("../../src/routes/mini-app.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /Connected Session/);
+  assert.match(source, /Development session bypass active/);
+  assert.match(source, /Real Telegram session linking is still available/);
 });

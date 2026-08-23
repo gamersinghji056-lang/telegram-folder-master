@@ -1,5 +1,5 @@
 import { requireLinkedSession } from "./auth/linked-session.js";
-import { requireMiniUser } from "./mini-auth.js";
+import { requireMiniUserOrLocalDevBypass } from "./mini-auth.js";
 import { DEFAULT_AGENT_ID, agentProfileService } from "./agents/profile-service.js";
 import { ownerInstructionService } from "./agents/instruction-service.js";
 import { trainingService as defaultTrainingService } from "./agents/training-service.js";
@@ -38,7 +38,7 @@ function instructionIdFromPayload(payload = {}) {
 }
 
 export function createMiniTrainingHandlers({
-  verifyMiniUser = requireMiniUser,
+  verifyMiniUser = requireMiniUserOrLocalDevBypass,
   requireSession = requireLinkedSession,
   profileService = agentProfileService,
   instructionService = ownerInstructionService,

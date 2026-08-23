@@ -15,8 +15,9 @@ import {
 } from "./tg.js";
 import { startBot, restartBot, botUsername, botError, isLocalDevMode } from "./bot.js";
 import { analyzeFolders, joinAndCreateFolder } from "./process.js";
-import { requireMiniUser } from "./mini-auth.js";
+import { requireMiniUser, requireMiniUserOrLocalDevBypass } from "./mini-auth.js";
 import { miniTrainingHandlers } from "./mini-training-api.js";
+import { requireLinkedSession } from "./auth/linked-session.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKER_TOKEN = process.env.WORKER_TOKEN || "";
@@ -86,28 +87,51 @@ async function selfTest() {
 }
 
 async function miniStatus(payload) {
-  const mini = requireMiniUser(payload.initData);
-  const connected = await isUserConnected(mini.botUserId);
+  const mini = requireMiniUserOrLocalDevBypass(payload.initData);
+  let connected = false;
   let account = null;
+  let localDevSessionBypass = false;
 
-  if (connected) {
-    const me = await getMe(mini.botUserId);
-    account = {
-      telegram_user_id: Number(me.id),
-      telegramUserId: Number(me.id),
-      username: me.username || null,
-      first_name: me.firstName || null,
-      firstName: me.firstName || null,
-      last_name: me.lastName || null,
-      lastName: me.lastName || null,
-      is_premium: Boolean(me.premium),
-      isPremium: Boolean(me.premium),
-    };
+  try {
+    const linked = await requireLinkedSession(mini.botUserId);
+    connected = true;
+    localDevSessionBypass = Boolean(linked.localDevSessionBypass || mini.localDevMiniAppBypass);
+
+    if (localDevSessionBypass) {
+      account = {
+        telegram_user_id: mini.botUserId,
+        telegramUserId: mini.botUserId,
+        username: "local_dev_bypass",
+        first_name: "Local Dev",
+        firstName: "Local Dev",
+        last_name: null,
+        lastName: null,
+        is_premium: false,
+        isPremium: false,
+      };
+    } else {
+      const me = await getMe(mini.botUserId);
+      account = {
+        telegram_user_id: Number(me.id),
+        telegramUserId: Number(me.id),
+        username: me.username || null,
+        first_name: me.firstName || null,
+        firstName: me.firstName || null,
+        last_name: me.lastName || null,
+        lastName: me.lastName || null,
+        is_premium: Boolean(me.premium),
+        isPremium: Boolean(me.premium),
+      };
+    }
+  } catch (e) {
+    connected = await isUserConnected(mini.botUserId).catch(() => false);
+    if (connected) throw e;
   }
 
   return {
     ok: true,
     connected,
+    localDevSessionBypass,
     botUser: mini.user,
     account,
     status: statusPayload(),

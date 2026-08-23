@@ -18,6 +18,7 @@ declare global {
 type MiniStatus = {
   ok: boolean;
   connected: boolean;
+  localDevSessionBypass?: boolean;
   botUser?: { username: string | null; firstName: string | null };
   account?: { username: string | null; firstName: string | null };
 };
@@ -205,6 +206,7 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 
 export function MiniApp() {
   const [initData, setInitData] = useState("");
+  const [telegramReady, setTelegramReady] = useState(false);
   const [stage, setStage] = useState<Stage>("loading");
   const [status, setStatus] = useState<MiniStatus | null>(null);
   const [phone, setPhone] = useState("");
@@ -243,6 +245,7 @@ export function MiniApp() {
       app?.ready();
       app?.expand();
       setInitData(app?.initData ?? "");
+      setTelegramReady(true);
     };
 
     if (window.Telegram?.WebApp) {
@@ -259,8 +262,6 @@ export function MiniApp() {
 
   const mini = useCallback(
     async function mini<T>(action: string, payload: Record<string, unknown> = {}) {
-      if (!initData) throw new Error("Open this page from the Telegram bot Mini App button.");
-
       const res = await fetch("/api/public/mini", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -316,8 +317,8 @@ export function MiniApp() {
   );
 
   useEffect(() => {
-    if (initData) void refresh();
-  }, [initData, refresh]);
+    if (telegramReady) void refresh();
+  }, [telegramReady, refresh]);
 
   async function startLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -636,9 +637,15 @@ export function MiniApp() {
           </SecondaryButton>
         </header>
 
-        {!initData ? (
+        {!initData && !status?.localDevSessionBypass ? (
           <section className="panel p-5 text-sm text-muted-foreground">
             Open this from the bot's Mini App button.
+          </section>
+        ) : null}
+
+        {status?.localDevSessionBypass ? (
+          <section className="mb-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm text-warning">
+            Development session bypass active
           </section>
         ) : null}
 
@@ -1201,7 +1208,17 @@ export function MiniApp() {
                   </div>
                   <div className="rounded-md border border-border bg-secondary/40 p-3">
                     <div className="text-xs text-muted-foreground">Session</div>
-                    <div className="mt-1 font-medium">Connected for this Telegram user</div>
+                    <div className="mt-1 font-medium">
+                      {status?.localDevSessionBypass
+                        ? "Development session bypass active"
+                        : "Connected for this Telegram user"}
+                    </div>
+                    {status?.localDevSessionBypass ? (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        Real Telegram session linking is still available by disabling the local
+                        bypass flags and reopening the Mini App.
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </section>

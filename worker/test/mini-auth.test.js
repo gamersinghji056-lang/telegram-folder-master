@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 
-import { miniAppValidationBotToken, requireMiniUser } from "../src/mini-auth.js";
+import {
+  localDevMiniAppBypassConfig,
+  miniAppValidationBotToken,
+  requireMiniUser,
+  requireMiniUserOrLocalDevBypass,
+} from "../src/mini-auth.js";
 
 function signedInitData({ token, authDate = 1_800_000_000, user = { id: 1001 } }) {
   const params = new URLSearchParams({
@@ -93,5 +98,68 @@ test("local dev Mini App validation rejects data signed by the production bot to
   assert.throws(
     () => requireMiniUser(initData, { env, telegramState, now: 1_800_000_000_000 }),
     /Telegram Mini App initData validation failed/,
+  );
+});
+
+test("production Mini App auth cannot enter local dev bypass", () => {
+  const env = {
+    LOCAL_DEV_ALLOW_SESSION_BYPASS: "true",
+    DEV_TELEGRAM_USER_ID: "1001",
+  };
+
+  assert.equal(localDevMiniAppBypassConfig(env).enabled, false);
+  assert.throws(
+    () => requireMiniUserOrLocalDevBypass("", { env, telegramState: { botToken: "prod-token" } }),
+    /Telegram Mini App initData is missing/,
+  );
+});
+
+test("LOCAL_DEV_MODE alone does not bypass Mini App initData validation", () => {
+  const env = {
+    LOCAL_DEV_MODE: "true",
+    DEV_TELEGRAM_USER_ID: "1001",
+  };
+
+  assert.equal(localDevMiniAppBypassConfig(env).enabled, false);
+  assert.throws(
+    () => requireMiniUserOrLocalDevBypass("invalid", { env, telegramState: { botToken: "dev" } }),
+    /Telegram Mini App initData hash is missing/,
+  );
+});
+
+test("LOCAL_DEV_ALLOW_SESSION_BYPASS alone does not bypass Mini App initData validation", () => {
+  const env = {
+    LOCAL_DEV_ALLOW_SESSION_BYPASS: "true",
+    DEV_TELEGRAM_USER_ID: "1001",
+  };
+
+  assert.equal(localDevMiniAppBypassConfig(env).enabled, false);
+  assert.throws(
+    () => requireMiniUserOrLocalDevBypass("invalid", { env, telegramState: { botToken: "prod" } }),
+    /Telegram Mini App initData hash is missing/,
+  );
+});
+
+test("explicit local dev Mini App bypass uses DEV_TELEGRAM_USER_ID without browser trust", () => {
+  const env = {
+    LOCAL_DEV_MODE: "true",
+    LOCAL_DEV_ALLOW_SESSION_BYPASS: "true",
+    DEV_TELEGRAM_USER_ID: "4242",
+  };
+
+  assert.equal(localDevMiniAppBypassConfig(env).enabled, true);
+  assert.deepEqual(
+    requireMiniUserOrLocalDevBypass("", { env, telegramState: { botToken: "prod-token" } }),
+    {
+      botUserId: 4242,
+      localDevMiniAppBypass: true,
+      testOnly: true,
+      user: {
+        id: 4242,
+        username: "local_dev_bypass",
+        firstName: "Local Dev",
+        lastName: null,
+      },
+    },
   );
 });
