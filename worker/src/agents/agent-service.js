@@ -1,21 +1,27 @@
-import { createAgentContext, createAiRequest } from "../ai/contract.js";
+import { createAiRequest } from "../ai/contract.js";
 import { runAiTurn } from "../ai/orchestrator.js";
 import { requireLinkedSession } from "../auth/linked-session.js";
+import { createCustomerAiContextBuilder } from "./context-builder.js";
+import { agentProfileService, DEFAULT_AGENT_ID } from "./profile-service.js";
+import { ownerInstructionService } from "./instruction-service.js";
+
+export const defaultCustomerAiContextBuilder = createCustomerAiContextBuilder({
+  profileService: agentProfileService,
+  instructionService: ownerInstructionService,
+});
 
 export function createAgentService({
   requireSession = requireLinkedSession,
   runTurn = runAiTurn,
-  defaultAgentId = "personal-representative",
+  defaultAgentId = DEFAULT_AGENT_ID,
+  contextBuilder = defaultCustomerAiContextBuilder,
 } = {}) {
   return {
-    buildAgentContext({ botUserId, agentId = defaultAgentId } = {}) {
-      return createAgentContext({
+    async buildAgentContext({ botUserId, agentId = defaultAgentId } = {}) {
+      return contextBuilder.buildContext({
         ownerId: botUserId,
         customerId: botUserId,
         agentId,
-        instructions: null,
-        memory: null,
-        knowledge: null,
       });
     },
 
@@ -28,7 +34,7 @@ export function createAgentService({
     }) {
       await requireSession(botUserId);
 
-      const context = this.buildAgentContext({ botUserId, agentId });
+      const context = await this.buildAgentContext({ botUserId, agentId });
       const request = createAiRequest({
         source: "telegram",
         modelRole,

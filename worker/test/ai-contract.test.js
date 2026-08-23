@@ -344,9 +344,9 @@ test("customer and agent context is preserved through the provider request", asy
   assert.equal(result.context.ownerId, "456");
   assert.equal(result.context.customerId, "456");
   assert.equal(result.context.agentId, "agent-custom");
-  assert.equal(result.context.instructions, null);
-  assert.equal(result.context.memory, null);
-  assert.equal(result.context.knowledge, null);
+  assert.match(result.context.instructions, /You are a Personal AI Representative/);
+  assert.equal(result.context.memory.enabled, false);
+  assert.equal(result.context.knowledge.enabled, false);
   assert.deepEqual(calls[0].context, result.context);
 });
 

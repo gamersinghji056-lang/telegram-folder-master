@@ -21,6 +21,9 @@ export function createAgentContext({
   instructions = null,
   memory = null,
   knowledge = null,
+  conversationContext = null,
+  profile = null,
+  ownerInstructions = [],
 } = {}) {
   return {
     ownerId: ownerId == null ? null : String(ownerId),
@@ -29,6 +32,9 @@ export function createAgentContext({
     instructions,
     memory,
     knowledge,
+    conversationContext,
+    profile,
+    ownerInstructions,
   };
 }
 
