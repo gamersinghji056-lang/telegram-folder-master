@@ -7,6 +7,17 @@
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
 const WORKER_TOKEN = process.env.WORKER_TOKEN || "";
 
+export class AppApiFetchError extends Error {
+  constructor(action, cause) {
+    super(`App API "${action}" fetch failed.`);
+    this.name = "AppApiFetchError";
+    this.action = action;
+    this.code = cause?.cause?.code || cause?.code || cause?.name || "FETCH_FAILED";
+    this.detail = cause?.cause?.message || cause?.message || "fetch failed";
+    this.cause = cause;
+  }
+}
+
 async function parseResponse(res, label) {
   const text = await res.text();
 
@@ -38,17 +49,22 @@ export async function api(action, payload = {}) {
     throw new Error("WORKER_TOKEN is not set.");
   }
 
-  const res = await fetch(`${APP_URL}/api/public/worker`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${WORKER_TOKEN}`,
-    },
-    body: JSON.stringify({
-      action,
-      payload,
-    }),
-  });
+  let res;
+  try {
+    res = await fetch(`${APP_URL}/api/public/worker`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${WORKER_TOKEN}`,
+      },
+      body: JSON.stringify({
+        action,
+        payload,
+      }),
+    });
+  } catch (error) {
+    throw new AppApiFetchError(action, error);
+  }
 
   return parseResponse(res, `App API "${action}"`);
 }

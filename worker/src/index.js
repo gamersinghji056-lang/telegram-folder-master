@@ -18,6 +18,7 @@ import { analyzeFolders, joinAndCreateFolder } from "./process.js";
 import { requireMiniUser, requireMiniUserOrLocalDevBypass } from "./mini-auth.js";
 import { miniTrainingHandlers } from "./mini-training-api.js";
 import { requireLinkedSession } from "./auth/linked-session.js";
+import { loadStartupConfig } from "./startup-config.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKER_TOKEN = process.env.WORKER_TOKEN || "";
@@ -569,7 +570,7 @@ async function init() {
     return;
   }
   try {
-    await loadConfig();
+    await loadStartupConfig({ load: loadConfig });
   } catch (e) {
     console.error("could not load config:", e.message);
   }

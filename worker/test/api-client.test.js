@@ -120,3 +120,32 @@ test("worker session API no longer requires Supabase service role variables", as
   assert.equal(calls.length, 1);
   assert.doesNotThrow(() => JSON.parse(calls[0].init.body));
 });
+
+test("App API fetch failures expose safe action and network code", async () => {
+  const { api } = await importApiWithEnv({
+    APP_URL: "https://app.example.test",
+    WORKER_TOKEN: "worker-token",
+  });
+  const cause = new Error("connect timeout");
+  cause.code = "UND_ERR_CONNECT_TIMEOUT";
+  const fetchError = new TypeError("fetch failed", { cause });
+
+  await withFetch(
+    async () => {
+      throw fetchError;
+    },
+    async () => {
+      await assert.rejects(
+        () => api("pull"),
+        (error) => {
+          assert.equal(error.name, "AppApiFetchError");
+          assert.equal(error.action, "pull");
+          assert.equal(error.code, "UND_ERR_CONNECT_TIMEOUT");
+          assert.equal(error.detail, "connect timeout");
+          assert.match(error.message, /App API "pull" fetch failed/);
+          return true;
+        },
+      );
+    },
+  );
+});
